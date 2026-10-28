@@ -1,0 +1,21 @@
+# Go
+backend/vault/
+*.exe
+*.test
+*.out
+
+# Environment (contains secrets)
+.env
+.env.local
+
+# Node / React
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
