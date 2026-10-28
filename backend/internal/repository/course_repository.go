@@ -60,7 +60,7 @@ func (r *Repo) ListCourses(ctx context.Context, userID string) ([]models.Course,
 	}
 	defer rows.Close()
 
-	var out []models.Course
+	out := make([]models.Course, 0)
 	for rows.Next() {
 		var c models.Course
 		if err := rows.Scan(&c.ID, &c.Name, &c.Code, &c.OwnerID, &c.GroupSize, &c.CreatedAt, &c.UpdatedAt); err != nil {

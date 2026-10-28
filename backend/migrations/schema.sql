@@ -10,10 +10,13 @@ create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------------
 -- PROFILES — mirrors Supabase Auth users so we can attach domain data
--- (skills, name) and enforce FKs to auth.users.
+-- (skills, name). The id is the Supabase Auth user id for real signups, but it
+-- is NOT FK-constrained to auth.users so that local development with
+-- ALLOW_NO_AUTH=true (synthetic demo user ids) also works. The
+-- handle_new_user() trigger below keeps real signups in sync.
 -- ---------------------------------------------------------------------------
 create table if not exists public.profiles (
-  id         uuid primary key references auth.users(id) on delete cascade,
+  id         uuid primary key,
   full_name  text not null default '',
   email      text not null unique,
   avatar_url text,

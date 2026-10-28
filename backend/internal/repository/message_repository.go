@@ -38,7 +38,7 @@ func (r *Repo) ListMessages(ctx context.Context, groupID string, limit int) ([]m
 	}
 	defer rows.Close()
 
-	var out []models.Message
+	out := make([]models.Message, 0)
 	for rows.Next() {
 		var m models.Message
 		if err := rows.Scan(&m.ID, &m.GroupID, &m.SenderID, &m.Content, &m.CreatedAt, &m.SenderName); err != nil {

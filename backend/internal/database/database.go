@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,6 +23,14 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	cfg.MinConns = 1
 	cfg.MaxConnLifetime = time.Hour
 	cfg.MaxConnIdleTime = 10 * time.Minute
+
+	// DISABLE the prepared-statement cache. Supabase's transaction-mode
+	// pooler (port 6543) multiplexes connections and cannot map pgx's named
+	// prepared statements back to the correct session, which raises
+	// "prepared statement already exists" (SQLSTATE 42P05). Disabling the
+	// cache makes every query use the simple protocol, which the pooler
+	// handles correctly.
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

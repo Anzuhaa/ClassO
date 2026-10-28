@@ -28,7 +28,7 @@ export function CourseList({
     setLoading(true)
     setError('')
     try {
-      setCourses(await api.listCourses())
+      setCourses((await api.listCourses()) ?? [])
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to load courses')
     } finally {

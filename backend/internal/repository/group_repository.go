@@ -58,7 +58,7 @@ func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group,
 	}
 	defer rows.Close()
 
-	var out []models.Group
+	out := make([]models.Group, 0)
 	for rows.Next() {
 		var g models.Group
 		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.CreatedAt); err != nil {
@@ -95,7 +95,7 @@ func (r *Repo) ListGroupMemberIDs(ctx context.Context, groupID string) ([]string
 	}
 	defer rows.Close()
 
-	var out []string
+	out := make([]string, 0)
 	for rows.Next() {
 		var uid string
 		if err := rows.Scan(&uid); err != nil {
@@ -135,7 +135,7 @@ func (r *Repo) GetGroupsForUser(ctx context.Context, userID string) ([]models.Gr
 	}
 	defer rows.Close()
 
-	var out []models.Group
+	out := make([]models.Group, 0)
 	for rows.Next() {
 		var g models.Group
 		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.CreatedAt); err != nil {

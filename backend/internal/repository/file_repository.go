@@ -39,7 +39,7 @@ func (r *Repo) ListFiles(ctx context.Context, groupID string) ([]models.File, er
 	}
 	defer rows.Close()
 
-	var out []models.File
+	out := make([]models.File, 0)
 	for rows.Next() {
 		var f models.File
 		if err := rows.Scan(&f.ID, &f.GroupID, &f.UploaderID, &f.Name, &f.StoragePath, &f.Size, &f.MimeType, &f.CreatedAt, &f.UploaderName); err != nil {

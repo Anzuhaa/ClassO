@@ -41,7 +41,7 @@ func (r *Repo) ListTasks(ctx context.Context, groupID string) ([]models.Task, er
 	}
 	defer rows.Close()
 
-	var out []models.Task
+	out := make([]models.Task, 0)
 	for rows.Next() {
 		var t models.Task
 		if err := rows.Scan(&t.ID, &t.GroupID, &t.Title, &t.Description, &t.AssigneeID,

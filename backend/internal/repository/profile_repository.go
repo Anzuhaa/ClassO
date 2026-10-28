@@ -50,7 +50,7 @@ func (r *Repo) ListProfilesByCourse(ctx context.Context, courseID string) ([]mod
 	}
 	defer rows.Close()
 
-	var out []models.Profile
+	out := make([]models.Profile, 0)
 	for rows.Next() {
 		var p models.Profile
 		if err := rows.Scan(&p.ID, &p.FullName, &p.Email, &p.AvatarURL, &p.Skills, &p.CreatedAt); err != nil {
@@ -76,7 +76,7 @@ func (r *Repo) ListProfilesByGroup(ctx context.Context, groupID string) ([]model
 	}
 	defer rows.Close()
 
-	var out []models.Profile
+	out := make([]models.Profile, 0)
 	for rows.Next() {
 		var p models.Profile
 		if err := rows.Scan(&p.ID, &p.FullName, &p.Email, &p.AvatarURL, &p.Skills, &p.CreatedAt); err != nil {
