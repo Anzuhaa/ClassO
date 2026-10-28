@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/classo/backend/internal/middleware"
 	"github.com/classo/backend/internal/models"
@@ -29,6 +30,22 @@ func (h *CourseHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, courses)
+}
+
+// Get returns a single course by id, including its join code so instructors can
+// share it from the course header.
+func (h *CourseHandler) Get(w http.ResponseWriter, r *http.Request) {
+	courseID := r.PathValue("id")
+	course, err := h.repo.GetCourse(r.Context(), courseID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "course not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load course")
+		return
+	}
+	writeJSON(w, http.StatusOK, course)
 }
 
 // createCourseRequest is the payload for creating a course.
@@ -134,4 +151,89 @@ func (h *CourseHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// joinCourseRequest is the payload for joining a course by its join code.
+type joinCourseRequest struct {
+	JoinCode string `json:"joinCode"`
+}
+
+// JoinByCode enrolls the current user into the course matching the given join
+// code as a student. Idempotent: joining an already-joined course is a no-op
+// success.
+func (h *CourseHandler) JoinByCode(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserID(r.Context())
+	var req joinCourseRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	code := strings.TrimSpace(req.JoinCode)
+	if code == "" {
+		writeError(w, http.StatusBadRequest, "joinCode is required")
+		return
+	}
+
+	course, err := h.repo.GetCourseByJoinCode(r.Context(), code)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "invalid join code")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to look up course")
+		return
+	}
+
+	if err := h.repo.AddCourseMember(r.Context(), course.ID, userID, models.RoleStudent); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to join course")
+		return
+	}
+	writeJSON(w, http.StatusOK, course)
+}
+
+// Members returns the enrollment roster (profiles + per-course role) for a
+// course, so instructors and students can see who is enrolled and their tags.
+func (h *CourseHandler) Members(w http.ResponseWriter, r *http.Request) {
+	courseID := r.PathValue("id")
+	members, err := h.repo.ListCourseMembers(r.Context(), courseID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list members")
+		return
+	}
+	writeJSON(w, http.StatusOK, members)
+}
+
+// MyGroup returns the group id the current user already belongs to within this
+// course (or an empty string when they are in none). The frontend uses this to
+// render the "Joined" state and disable join buttons across groups.
+func (h *CourseHandler) MyGroup(w http.ResponseWriter, r *http.Request) {
+	courseID := r.PathValue("id")
+	userID := middleware.UserID(r.Context())
+	groupID, err := h.repo.GroupInCourseForUser(r.Context(), courseID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load membership")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"groupId": groupID})
+}
+
+// RandomAssign splits the course roster into groups using a fast deterministic
+// shuffle, bypassing the AI. It is the instructor's "Random Assign" action.
+func (h *CourseHandler) RandomAssign(w http.ResponseWriter, r *http.Request) {
+	courseID := r.PathValue("id")
+	course, err := h.repo.GetCourse(r.Context(), courseID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "course not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load course")
+		return
+	}
+
+	result, err := h.formation.RandomAssign(r.Context(), course)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }

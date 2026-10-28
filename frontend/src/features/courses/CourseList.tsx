@@ -1,6 +1,6 @@
-// CourseList: the dashboard home showing all courses plus a create form.
+// CourseList: the dashboard home showing all courses plus a create/join form.
 import { useEffect, useState } from 'react'
-import { Plus, Users } from 'lucide-react'
+import { Plus, Users, LogIn, X } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
 import type { Course } from '../../types'
 import { GlassCard, Button, Input, Label, Spinner } from '../../components/ui'
@@ -16,6 +16,7 @@ export function CourseList({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
+  const [showJoin, setShowJoin] = useState(false)
 
   // Form state.
   const [name, setName] = useState('')
@@ -23,6 +24,11 @@ export function CourseList({
   const [groupSize, setGroupSize] = useState(4)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
+
+  // Join state.
+  const [joinCode, setJoinCode] = useState('')
+  const [joining, setJoining] = useState(false)
+  const [joinError, setJoinError] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -66,6 +72,26 @@ export function CourseList({
     }
   }
 
+  const join = async () => {
+    setJoinError('')
+    if (!joinCode.trim()) {
+      setJoinError('Enter a join code.')
+      return
+    }
+    setJoining(true)
+    try {
+      await api.joinCourse(joinCode.trim())
+      setJoinCode('')
+      setShowJoin(false)
+      await load()
+      onCreated()
+    } catch (e) {
+      setJoinError(e instanceof ApiError ? e.message : 'Failed to join course')
+    } finally {
+      setJoining(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between">
@@ -73,10 +99,16 @@ export function CourseList({
           <h2 className="text-2xl font-bold">My Courses</h2>
           <p className="text-sm text-[var(--text-secondary)]">Manage courses and group formation</p>
         </div>
-        <Button onClick={() => setShowForm((s) => !s)}>
-          <Plus size={16} />
-          New Course
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={() => setShowJoin(true)}>
+            <LogIn size={16} />
+            Join Course
+          </Button>
+          <Button onClick={() => setShowForm((s) => !s)}>
+            <Plus size={16} />
+            New Course
+          </Button>
+        </div>
       </header>
 
       {showForm && (
@@ -106,6 +138,34 @@ export function CourseList({
         </GlassCard>
       )}
 
+      {/* ---- Join course modal ---- */}
+      {showJoin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowJoin(false)}>
+          <GlassCard strong className="w-full max-w-sm p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Join a course</h3>
+              <button onClick={() => setShowJoin(false)} className="btn-ghost p-2" aria-label="Close">
+                <X size={16} />
+              </button>
+            </div>
+            <Label text="Join code">
+              <Input
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                placeholder="CLS482"
+                className="font-mono tracking-widest"
+                maxLength={6}
+              />
+            </Label>
+            {joinError && <p className="text-sm text-red-500">{joinError}</p>}
+            <Button onClick={join} disabled={joining} className="w-full">
+              {joining ? <Spinner /> : <LogIn size={16} />}
+              Join
+            </Button>
+          </GlassCard>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex justify-center py-16 text-[var(--text-secondary)]">
           <Spinner />
@@ -116,7 +176,7 @@ export function CourseList({
         <GlassCard className="p-10 text-center text-[var(--text-secondary)]">
           <Users size={40} className="mx-auto mb-3 opacity-40" />
           <p className="font-semibold text-[var(--text)]">No courses yet</p>
-          <p className="text-sm">Create your first course to start forming groups.</p>
+          <p className="text-sm">Create your first course, or join one with a code.</p>
         </GlassCard>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -129,7 +189,7 @@ export function CourseList({
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="font-semibold">{c.name}</h3>
-                  <p className="text-sm text-[var(--text-secondary)]">{c.code || 'No code'}</p>
+                  <p className="text-sm text-[var(--text-secondary)]">{c.code || `Join: ${c.joinCode}`}</p>
                 </div>
                 <Users size={20} className="text-[var(--text-tertiary)]" />
               </div>

@@ -100,14 +100,20 @@ func verifySupabaseJWT(cfg *config.Config, token string) string {
 	return ""
 }
 
-// ensureProfile lazily creates/updates the profiles row for the identified
-// user so foreign keys resolve, using minimal placeholder data in demo mode.
+// ensureProfile lazily creates the profiles row for the identified user so
+// foreign keys resolve. It preserves any existing profile (e.g. one created
+// via the profile switcher) instead of overwriting it, falling back to a
+// minimal placeholder only when the profile is absent.
 func ensureProfile(repo *repository.Repo, r *http.Request, userID string) {
+	if existing, err := repo.GetProfile(r.Context(), userID); err == nil && existing != nil {
+		return
+	}
 	p := models.Profile{
 		ID:       userID,
 		FullName: "Demo Student",
 		Email:    userID + "@classo.local",
 		Skills:   []string{},
+		Role:     models.RoleStudent,
 	}
 	// Best-effort; failures are non-fatal for the request path.
 	_ = repo.UpsertProfile(r.Context(), p)
@@ -125,7 +131,7 @@ func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-User-ID")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

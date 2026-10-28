@@ -64,12 +64,21 @@ npm run dev               # http://localhost:5173 (proxies /v1 → :8080)
 
 | Method | Path                              | Description                       |
 | ------ | --------------------------------- | --------------------------------- |
-| GET    | `/v1/courses`                     | List my courses                   |
-| POST   | `/v1/courses`                     | Create a course                     |
+| GET    | `/v1/profiles`                    | List profiles (demo switcher)      |
+| GET    | `/v1/profiles/me`                 | Get the active profile             |
+| POST   | `/v1/profiles`                    | Create/select a profile            |
+| GET    | `/v1/courses`                     | List my courses                    |
+| POST   | `/v1/courses`                     | Create a course (generates join code) |
+| POST   | `/v1/courses/join`                | Join a course by join code         |
+| GET    | `/v1/courses/{id}`                | Get a course (incl. join code)     |
 | POST   | `/v1/courses/{id}/form`           | AI-form groups (course-wide)       |
-| GET    | `/v1/courses/{id}/groups`         | List groups                        |
+| POST   | `/v1/courses/{id}/random-assign`  | Randomly assign groups (shuffle)   |
+| GET    | `/v1/courses/{id}/groups`         | List groups (with member count)    |
+| GET    | `/v1/courses/{id}/members`        | List course member roster          |
+| GET    | `/v1/courses/{id}/my-group`       | Get my group in a course           |
 | POST   | `/v1/courses/{id}/members`        | Enroll a member                    |
 | GET    | `/v1/groups/{id}/members`         | List group members                 |
+| POST   | `/v1/groups/{id}/join`            | Self-join a group                  |
 | GET    | `/v1/groups/{id}/messages`        | List chat messages               |
 | POST   | `/v1/groups/{id}/messages`        | Send a chat message              |
 | GET    | `/v1/groups/{id}/tasks`           | List tasks                         |

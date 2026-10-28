@@ -6,6 +6,7 @@ export interface Profile {
   email: string
   avatarUrl?: string
   skills: string[]
+  role: 'instructor' | 'student'
   createdAt: string
 }
 
@@ -13,10 +14,23 @@ export interface Course {
   id: string
   name: string
   code?: string
+  joinCode: string
   ownerId: string
   groupSize: number
   createdAt: string
   updatedAt: string
+}
+
+// CourseMember is a profile joined with its per-course role, for the roster.
+export interface CourseMember {
+  id: string
+  fullName: string
+  email: string
+  avatarUrl?: string
+  skills: string[]
+  role: 'instructor' | 'student'
+  createdAt: string
+  courseRole: 'instructor' | 'student'
 }
 
 export interface Group {
@@ -24,6 +38,7 @@ export interface Group {
   courseId: string
   name: string
   createdAt: string
+  memberCount?: number
 }
 
 export interface Message {

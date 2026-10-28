@@ -34,6 +34,59 @@ func (h *GroupHandler) Members(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, members)
 }
 
+// Join adds the current user to a group as a "member", enforcing the one-
+// group-per-course rule and a size cap (the course's group_size). Idempotent
+// when the user is already in this exact group.
+func (h *GroupHandler) Join(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	userID := middleware.UserID(r.Context())
+
+	group, err := h.repo.GetGroup(r.Context(), groupID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load group")
+		return
+	}
+
+	// Reject if the user is already in another group within this course.
+	existing, err := h.repo.GroupInCourseForUser(r.Context(), group.CourseID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check membership")
+		return
+	}
+	if existing != "" && existing != groupID {
+		writeError(w, http.StatusConflict, "you are already in another group in this course")
+		return
+	}
+
+	// Reject if the group is full (current size reaches the course group_size).
+	course, err := h.repo.GetCourse(r.Context(), group.CourseID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load course")
+		return
+	}
+	if existing == "" { // skip size check if already a member (re-join no-op)
+		count, err := h.repo.CountGroupMembers(r.Context(), groupID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to count members")
+			return
+		}
+		if count >= course.GroupSize {
+			writeError(w, http.StatusConflict, "group is full")
+			return
+		}
+	}
+
+	if err := h.repo.JoinGroup(r.Context(), groupID, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to join group")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "groupId": groupID})
+}
+
 // createMessageRequest is the payload for posting a chat message.
 type createMessageRequest struct {
 	Content string `json:"content"`

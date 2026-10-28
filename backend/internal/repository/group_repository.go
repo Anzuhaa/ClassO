@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"github.com/classo/backend/internal/models"
 	"github.com/jackc/pgx/v5"
@@ -45,13 +46,17 @@ func (r *Repo) CreateGroupWithMembers(ctx context.Context, g models.Group, membe
 	return created, nil
 }
 
-// ListGroups returns all groups in a course with their member ids, ordered by
-// creation time so the dashboard can render a stable list.
+// ListGroups returns all groups in a course with their membership counts,
+// ordered by creation time so the dashboard can render a stable list. The
+// count lets the frontend disable "Join Group" once a group is full.
 func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group, error) {
 	rows, err := r.Pool.Query(ctx, `
-		SELECT id, course_id, name, created_at
-		FROM groups WHERE course_id = $1
-		ORDER BY created_at ASC
+		SELECT g.id, g.course_id, g.name, g.created_at, COUNT(gm.id)
+		FROM groups g
+		LEFT JOIN group_members gm ON gm.group_id = g.id
+		WHERE g.course_id = $1
+		GROUP BY g.id
+		ORDER BY g.created_at ASC
 	`, courseID)
 	if err != nil {
 		return nil, err
@@ -61,7 +66,7 @@ func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group,
 	out := make([]models.Group, 0)
 	for rows.Next() {
 		var g models.Group
-		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.CreatedAt, &g.MemberCount); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -106,15 +111,54 @@ func (r *Repo) ListGroupMemberIDs(ctx context.Context, groupID string) ([]string
 	return out, rows.Err()
 }
 
-// IsGroupMember reports whether the user belongs to the group (or owns the
-// course), used by the auth guard to gate group-scoped endpoints.
+// CountGroupMembers returns the number of members in a group (current size).
+func (r *Repo) CountGroupMembers(ctx context.Context, groupID string) (int, error) {
+	var n int
+	err := r.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM group_members WHERE group_id = $1
+	`, groupID).Scan(&n)
+	return n, err
+}
+
+// GroupInCourseForUser returns the group id the user already belongs to within
+// the given course, or "" when the user is not yet in any group there.
+func (r *Repo) GroupInCourseForUser(ctx context.Context, courseID, userID string) (string, error) {
+	var groupID string
+	err := r.Pool.QueryRow(ctx, `
+		SELECT gm.group_id
+		FROM group_members gm
+		JOIN groups g ON g.id = gm.group_id
+		WHERE g.course_id = $1 AND gm.user_id = $2
+		LIMIT 1
+	`, courseID, userID).Scan(&groupID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return groupID, err
+}
+
+// JoinGroup adds a user to a group as a "member", enforcing (via UNIQUE
+// constraint) that a user is not double-added to the same group. Callers must
+// check GroupInCourseForUser first to honor the one-group-per-course rule.
+func (r *Repo) JoinGroup(ctx context.Context, groupID, userID string) error {
+	_, err := r.Pool.Exec(ctx, `
+		INSERT INTO group_members (group_id, user_id, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (group_id, user_id) DO NOTHING
+	`, groupID, userID, models.RoleMember)
+	return err
+}
+
+// IsGroupMember reports whether the user belongs to the group, or owns the
+// course that contains the group (so instructors can also view group content).
 func (r *Repo) IsGroupMember(ctx context.Context, groupID, userID string) (bool, error) {
 	var exists bool
 	err := r.Pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM group_members gm
 			JOIN groups g ON g.id = gm.group_id
-			WHERE gm.group_id = $1 AND (gm.user_id = $2 OR g.owner_id = $2)
+			JOIN courses c ON c.id = g.course_id
+			WHERE gm.group_id = $1 AND (gm.user_id = $2 OR c.owner_id = $2)
 		)
 	`, groupID, userID).Scan(&exists)
 	return exists, err

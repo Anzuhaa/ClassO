@@ -45,6 +45,7 @@ func main() {
 	courseHandler := handlers.NewCourseHandler(repo, formationService)
 	groupHandler := handlers.NewGroupHandler(repo, summaryService)
 	fileHandler := handlers.NewFileHandler(repo, cfg)
+	profileHandler := handlers.NewProfileHandler(repo)
 
 	// 4. Mount the router with method-based paths (Go 1.22+ pattern syntax).
 	mux := http.NewServeMux()
@@ -55,15 +56,26 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	// Profiles.
+	mux.HandleFunc("GET /v1/profiles", profileHandler.List)
+	mux.HandleFunc("GET /v1/profiles/me", profileHandler.Me)
+	mux.HandleFunc("POST /v1/profiles", profileHandler.Create)
+
 	// Courses.
 	mux.HandleFunc("GET /v1/courses", courseHandler.List)
 	mux.HandleFunc("POST /v1/courses", courseHandler.Create)
+	mux.HandleFunc("POST /v1/courses/join", courseHandler.JoinByCode)
+	mux.HandleFunc("GET /v1/courses/{id}", courseHandler.Get)
 	mux.HandleFunc("POST /v1/courses/{id}/form", courseHandler.Form)
+	mux.HandleFunc("POST /v1/courses/{id}/random-assign", courseHandler.RandomAssign)
 	mux.HandleFunc("GET /v1/courses/{id}/groups", courseHandler.ListGroups)
+	mux.HandleFunc("GET /v1/courses/{id}/members", courseHandler.Members)
+	mux.HandleFunc("GET /v1/courses/{id}/my-group", courseHandler.MyGroup)
 	mux.HandleFunc("POST /v1/courses/{id}/members", courseHandler.AddMember)
 
 	// Group workspace.
 	mux.HandleFunc("GET /v1/groups/{id}/members", groupHandler.Members)
+	mux.HandleFunc("POST /v1/groups/{id}/join", groupHandler.Join)
 	mux.HandleFunc("GET /v1/groups/{id}/messages", groupHandler.Messages)
 	mux.HandleFunc("POST /v1/groups/{id}/messages", groupHandler.SendMessage)
 	mux.HandleFunc("GET /v1/groups/{id}/tasks", groupHandler.Tasks)

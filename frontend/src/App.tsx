@@ -8,6 +8,7 @@ import type { Course } from './types'
 import { CourseList } from './features/courses/CourseList'
 import { CourseDetail } from './features/courses/CourseDetail'
 import { GroupWorkspace } from './features/groups/GroupWorkspace'
+import { ProfileSwitcher } from './features/profiles/ProfileSwitcher'
 
 type View =
   | { name: 'courses' }
@@ -19,7 +20,7 @@ export default function App() {
   const [view, setView] = useState<View>({ name: 'courses' })
   const [courses, setCourses] = useState<Course[]>([])
 
-  // Load courses on mount for the sidebar.
+  // Load courses on mount (and re-load when the profile changes) for the sidebar.
   const refreshCourses = useCallback(async () => {
     try {
       setCourses(await api.listCourses())
@@ -30,6 +31,16 @@ export default function App() {
 
   useEffect(() => {
     void refreshCourses()
+  }, [refreshCourses])
+
+  // Re-fetch courses when the active profile changes (Feature 1 switcher).
+  useEffect(() => {
+    const onProfileChange = () => {
+      setView({ name: 'courses' })
+      void refreshCourses()
+    }
+    window.addEventListener('classo:profile-changed', onProfileChange)
+    return () => window.removeEventListener('classo:profile-changed', onProfileChange)
   }, [refreshCourses])
 
   return (
@@ -64,7 +75,8 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="mt-auto">
+        <div className="mt-auto space-y-2">
+          <ProfileSwitcher />
           <button
             onClick={toggle}
             className="btn-ghost inline-flex w-full items-center justify-center gap-2 px-3 py-2 text-sm"

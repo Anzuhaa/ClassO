@@ -44,6 +44,17 @@ export function FileVault({ groupId }: { groupId: string }) {
     void load()
   }, [groupId])
 
+  // Poll so files uploaded by other group members show up without a reload.
+  useEffect(() => {
+    const t = setInterval(() => {
+      void api
+        .listFiles(groupId)
+        .then(setFiles)
+        .catch(() => {})
+    }, 5000)
+    return () => clearInterval(t)
+  }, [groupId])
+
   const onPick = async (file: File | undefined) => {
     if (!file) return
     setUploading(true)

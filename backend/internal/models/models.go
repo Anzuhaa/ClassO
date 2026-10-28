@@ -13,6 +13,7 @@ type Profile struct {
 	Email     string    `json:"email"`
 	AvatarURL string    `json:"avatarUrl,omitempty"`
 	Skills    []string  `json:"skills"`
+	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -21,6 +22,7 @@ type Course struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Code      string    `json:"code,omitempty"`
+	JoinCode  string    `json:"joinCode"`
 	OwnerID   string    `json:"ownerId"`
 	GroupSize int       `json:"groupSize"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -41,6 +43,11 @@ type Group struct {
 	CourseID  string    `json:"courseId"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"createdAt"`
+
+	// MemberCount is the number of current members, populated for list views
+	// so the UI can disable "Join Group" when the group is full. It is not a
+	// column; it's computed with a COUNT/JOIN.
+	MemberCount int `json:"memberCount,omitempty"`
 }
 
 // GroupMember mirrors group_members; Role is "lead" or "member".

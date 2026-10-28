@@ -31,6 +31,19 @@ export function ChatRoom({ groupId, members }: { groupId: string; members: Profi
     void load()
   }, [groupId])
 
+  // Lightweight "realtime" via polling: refresh the message list every few
+  // seconds so all group members see each other's messages without a manual
+  // reload. (A production deployment would subscribe to Supabase Realtime.)
+  useEffect(() => {
+    const t = setInterval(() => {
+      void api
+        .listMessages(groupId)
+        .then(setMessages)
+        .catch(() => {})
+    }, 3000)
+    return () => clearInterval(t)
+  }, [groupId])
+
   // Auto-scroll to the newest message.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })

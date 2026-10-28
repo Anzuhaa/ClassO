@@ -3,6 +3,7 @@
 import type {
   AISummary,
   Course,
+  CourseMember,
   FormationResult,
   Group,
   Message,
@@ -14,9 +15,30 @@ import type {
 
 const BASE = '/v1'
 
-// demoUserId is sent as the X-User-Id header when ALLOW_NO_AUTH is enabled so
-// the backend can resolve identity without Supabase Auth wired up.
+// Fallback demo user id used when no profile has been selected yet.
 export const demoUserId = '00000000-0000-0000-0000-000000000001'
+
+const PROFILE_KEY = 'classo.activeProfileId'
+
+/** activeUserId returns the id persisted by the profile switcher, or the demo
+ * fallback. ApiError methods send this as the X-User-ID header. */
+export function activeUserId(): string {
+  if (typeof window === 'undefined') return demoUserId
+  try {
+    return localStorage.getItem(PROFILE_KEY) || demoUserId
+  } catch {
+    return demoUserId
+  }
+}
+
+/** setActiveUserId persists the chosen profile id for subsequent requests. */
+export function setActiveUserId(id: string) {
+  try {
+    localStorage.setItem(PROFILE_KEY, id)
+  } catch {
+    /* ignore storage errors (private mode) */
+  }
+}
 
 /** ApiError is thrown on a non-2xx response with the server's error message. */
 export class ApiError extends Error {
@@ -33,7 +55,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      'X-User-Id': demoUserId,
+      'X-User-ID': activeUserId(),
       ...(init?.headers ?? {}),
     },
   })
@@ -55,13 +77,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Profiles
+  listProfiles: () => request<Profile[]>('/profiles'),
+  getMe: () => request<Profile>('/profiles/me'),
+  createProfile: (body: { fullName: string; role: 'instructor' | 'student'; skills: string[] }) =>
+    request<Profile>('/profiles', { method: 'POST', body: JSON.stringify(body) }),
+
   // Courses
   listCourses: () => request<Course[]>('/courses'),
+  getCourse: (courseId: string) => request<Course>(`/courses/${courseId}`),
   createCourse: (body: { name: string; code?: string; groupSize: number }) =>
     request<Course>('/courses', { method: 'POST', body: JSON.stringify(body) }),
+  joinCourse: (joinCode: string) =>
+    request<Course>('/courses/join', { method: 'POST', body: JSON.stringify({ joinCode }) }),
   formGroups: (courseId: string) =>
     request<FormationResult>(`/courses/${courseId}/form`, { method: 'POST' }),
+  randomAssign: (courseId: string) =>
+    request<FormationResult>(`/courses/${courseId}/random-assign`, { method: 'POST' }),
   listGroups: (courseId: string) => request<Group[]>(`/courses/${courseId}/groups`),
+  listCourseMembers: (courseId: string) => request<CourseMember[]>(`/courses/${courseId}/members`),
+  myGroup: (courseId: string) => request<{ groupId: string }>(`/courses/${courseId}/my-group`),
   addMember: (courseId: string, userId: string, role: string) =>
     request(`/courses/${courseId}/members`, {
       method: 'POST',
@@ -70,6 +105,8 @@ export const api = {
 
   // Group workspace
   listMembers: (groupId: string) => request<Profile[]>(`/groups/${groupId}/members`),
+  joinGroup: (groupId: string) =>
+    request<{ status: string; groupId: string }>(`/groups/${groupId}/join`, { method: 'POST' }),
   listMessages: (groupId: string) => request<Message[]>(`/groups/${groupId}/messages`),
   sendMessage: (groupId: string, content: string) =>
     request<Message>(`/groups/${groupId}/messages`, {
@@ -97,7 +134,7 @@ export const api = {
     form.append('file', file)
     const res = await fetch(`${BASE}/groups/${groupId}/files`, {
       method: 'POST',
-      headers: { 'X-User-Id': demoUserId },
+      headers: { 'X-User-ID': activeUserId() },
       body: form,
     })
     if (!res.ok) throw new ApiError(res.status, `Upload failed (${res.status})`)

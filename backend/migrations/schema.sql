@@ -21,6 +21,7 @@ create table if not exists public.profiles (
   email      text not null unique,
   avatar_url text,
   skills     text[] not null default '{}',
+  role       text not null default 'student' check (role in ('instructor','student')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -51,6 +52,7 @@ create table if not exists public.courses (
   id         uuid primary key default gen_random_uuid(),
   name       text not null,
   code       text,
+  join_code  text not null unique,
   owner_id   uuid not null references public.profiles(id) on delete cascade,
   group_size int  not null check (group_size > 0),
   created_at timestamptz not null default now(),
