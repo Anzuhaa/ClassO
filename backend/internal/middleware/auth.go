@@ -60,8 +60,8 @@ func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request)
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if sub := verifySupabaseJWT(cfg.SupabaseJWTSecret, token); sub != "" {
-			ensureProfile(repo, r, sub)
+		if sub, role := verifySupabaseJWT(cfg.SupabaseJWTSecret, token); sub != "" {
+			ensureProfile(repo, r, sub, role)
 			return sub
 		}
 	}
@@ -71,7 +71,7 @@ func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request)
 		if id == "" {
 			id = demoUserID
 		}
-		ensureProfile(repo, r, id)
+		ensureProfile(repo, r, id, "")
 		return id
 	}
 	return ""
@@ -82,26 +82,45 @@ type jwtHeader struct {
 	Alg string `json:"alg"`
 }
 
-// jwtClaims is the decoded JWT payload segment.
+// jwtClaims is the decoded JWT payload segment. Role is read from Supabase's
+// user_metadata (or app_metadata) so an admin-set role can be synced into the
+// profiles table on login.
 type jwtClaims struct {
 	Sub string `json:"sub"`
 	Exp int64  `json:"exp"`
+
+	UserMetadata map[string]any `json:"user_metadata"`
+	AppMetadata  map[string]any `json:"app_metadata"`
+}
+
+// roleFromClaims returns the instructor/student role carried in the JWT's
+// metadata, or "" when none is present.
+func roleFromClaims(c *jwtClaims) string {
+	for _, meta := range []map[string]any{c.AppMetadata, c.UserMetadata} {
+		if meta == nil {
+			continue
+		}
+		if v, ok := meta["role"].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // verifySupabaseJWT validates the HS256 signature of a Supabase-issued JWT and
-// returns its "sub" (user id) claim, or "" when the token is invalid.
+// returns its "sub" (user id) and role claims, or ("", "") when invalid.
 //
 // The token is split into header.payload.signature; the signature is an HMAC-
 // SHA256 over "header.payload" keyed with the project's JWT secret. Expiry is
 // not enforced here (Supabase issues short-lived access tokens and refreshes
 // are handled client-side), but malformed or unverifiable tokens are rejected.
-func verifySupabaseJWT(secret, token string) string {
+func verifySupabaseJWT(secret, token string) (sub, role string) {
 	if secret == "" {
-		return ""
+		return "", ""
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return ""
+		return "", ""
 	}
 
 	signingInput := parts[0] + "." + parts[1]
@@ -111,32 +130,42 @@ func verifySupabaseJWT(secret, token string) string {
 
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || !hmac.Equal(sig, expected) {
-		return ""
+		return "", ""
 	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var claims jwtClaims
 	if err := json.Unmarshal(payload, &claims); err != nil || claims.Sub == "" {
-		return ""
+		return "", ""
 	}
-	return claims.Sub
+	return claims.Sub, roleFromClaims(&claims)
 }
 
 // ensureProfile lazily creates the profiles row for the identified user so
-// foreign keys resolve. It preserves any existing profile, falling back to a
-// minimal placeholder (real email/full_name are set by the auth handlers).
-func ensureProfile(repo *repository.Repo, r *http.Request, userID string) {
-	if existing, err := repo.GetProfile(r.Context(), userID); err == nil && existing != nil {
+// foreign keys resolve, and (when a valid role came from the JWT) syncs that
+// role into profiles.role. It preserves any existing profile; real email and
+// full_name are set by the auth handlers.
+func ensureProfile(repo *repository.Repo, r *http.Request, userID, role string) {
+	existing, err := repo.GetProfile(r.Context(), userID)
+	if err == nil && existing != nil {
+		// Sync an admin-set role from the JWT into the profile when it differs.
+		if role != "" && role != existing.Role {
+			_ = repo.SetProfileRole(r.Context(), userID, role)
+		}
 		return
 	}
+
 	p := models.Profile{
 		ID:       userID,
 		FullName: "User",
 		Email:    userID + "@classo.local",
 		Role:     models.RoleStudent,
+	}
+	if role == models.RoleInstructor || role == models.RoleStudent {
+		p.Role = role
 	}
 	_ = repo.UpsertProfile(r.Context(), p)
 }

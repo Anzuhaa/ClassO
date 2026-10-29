@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Config holds every setting the backend needs at runtime.
@@ -25,6 +26,10 @@ type Config struct {
 
 	// Feature toggles.
 	AllowNoAuth bool // when true, seed a demo user so the app runs without Supabase Auth
+
+	// InstructorEmails is the allowlist of emails permitted to self-promote to
+	// the instructor role via POST /v1/profiles/me/promote.
+	InstructorEmails []string
 }
 
 // Load reads configuration from environment variables and applies defaults.
@@ -37,6 +42,7 @@ func Load() (*Config, error) {
 		SupabaseJWTSecret:  env("SUPABASE_JWT_SECRET", ""),
 		SupabaseServiceKey: env("SUPABASE_SERVICE_KEY", ""),
 		AllowNoAuth:        env("ALLOW_NO_AUTH", "false") == "true",
+		InstructorEmails:   splitCSV(env("INSTRUCTOR_EMAILS", "")),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -52,4 +58,18 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitCSV splits a comma-separated string into trimmed, non-empty parts,
+// lowercased so comparisons can be case-insensitive.
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, strings.ToLower(p))
+		}
+	}
+	return out
 }

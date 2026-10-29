@@ -8,16 +8,13 @@ import { getStoredUser } from '../../lib/auth'
 import type { Course } from '../../types'
 import { GlassCard, Button, Input, Label, Spinner } from '../../components/ui'
 
-export function CourseList({ onCreated }: { onCreated: () => void }) {
+export function CourseList({ onCreated, isInstructor }: { onCreated: () => void; isInstructor: boolean }) {
   const navigate = useNavigate()
   const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [showJoin, setShowJoin] = useState(false)
-
-  // The current user's global role (drives whether "New Course" is shown).
-  const [isInstructor, setIsInstructor] = useState(false)
 
   // Form state.
   const [name, setName] = useState('')
@@ -50,14 +47,6 @@ export function CourseList({ onCreated }: { onCreated: () => void }) {
 
   useEffect(() => {
     void load()
-  }, [])
-
-  // Load the profile role once so instructor-only actions are gated correctly.
-  useEffect(() => {
-    api
-      .getMe()
-      .then((p) => setIsInstructor(p.role === 'instructor'))
-      .catch(() => setIsInstructor(false))
   }, [])
 
   const create = async () => {

@@ -5,7 +5,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-route
 import { GraduationCap, Moon, Sun, BookOpen, Users } from 'lucide-react'
 import { useTheme } from './lib/theme'
 import { api } from './lib/api'
-import { getStoredUser, getAccessToken, type AuthUser } from './lib/auth'
+import { getStoredUser, getAccessToken, persistUser, type AuthUser } from './lib/auth'
 import type { Course } from './types'
 import { CourseList } from './features/courses/CourseList'
 import { CourseDetail } from './features/courses/CourseDetail'
@@ -19,6 +19,26 @@ export default function App() {
     const stored = getStoredUser()
     return token ? stored : null
   })
+
+  // On mount, refresh the role from the backend's authoritative profile (which
+  // syncs from Supabase Auth metadata) so an admin's role change takes effect
+  // on the user's next load without a full re-login.
+  useEffect(() => {
+    if (!user) return
+    api
+      .getMe()
+      .then((p) => {
+        const role = p.role === 'instructor' ? 'instructor' : 'student'
+        setUser((prev) => {
+          if (!prev || prev.role === role) return prev
+          const updated = { ...prev, role }
+          persistUser(updated)
+          return updated
+        })
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
 
   return (
     <BrowserRouter>
@@ -99,7 +119,7 @@ function AuthenticatedApp({ user, onLogout }: { user: AuthUser; onLogout: () => 
         <div className="mx-auto max-w-6xl">
           <Routes>
             <Route path="/" element={<Navigate to="/courses" replace />} />
-            <Route path="/courses" element={<CourseList onCreated={refreshCourses} />} />
+            <Route path="/courses" element={<CourseList onCreated={refreshCourses} isInstructor={user.role === 'instructor'} />} />
             <Route path="/courses/:courseId" element={<CourseDetail />} />
             <Route
               path="/courses/:courseId/groups/:groupId"

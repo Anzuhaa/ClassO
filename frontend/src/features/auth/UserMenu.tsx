@@ -1,5 +1,5 @@
-// UserMenu: a compact sidebar control showing the signed-in user with logout.
-// Replaces the old demo profile switcher (Feature 6 auth upgrade).
+// UserMenu: a compact sidebar control showing the signed-in user with logout,
+// plus their role. Replaces the old demo profile switcher (Feature 6 auth).
 import { User, LogOut } from 'lucide-react'
 import { logout, type AuthUser } from '../../lib/auth'
 
@@ -17,7 +17,9 @@ export function UserMenu({ user, onLogout }: { user: AuthUser; onLogout: () => v
         </span>
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{user.fullName || user.email}</p>
-          <p className="truncate text-xs text-[var(--text-tertiary)]">{user.email}</p>
+          <p className="truncate text-xs text-[var(--text-tertiary)]">
+            {user.email} · {user.role === 'instructor' ? 'Instructor' : 'Student'}
+          </p>
         </div>
       </div>
       <button

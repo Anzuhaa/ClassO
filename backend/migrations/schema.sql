@@ -24,15 +24,23 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 
--- Auto-populate a profile whenever a new auth user signs up.
+-- Auto-populate a profile whenever a new auth user signs up. The role defaults
+-- to 'student' but honors an admin-set role carried in the auth user's metadata
+-- (e.g. user_metadata.role = 'instructor').
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer set search_path = public
 as $$
+declare
+  v_role text := 'student';
 begin
-  insert into public.profiles (id, email, full_name)
-  values (new.id, new.email, coalesce(new.raw_user_meta_data->>'full_name', ''))
+  if coalesce(new.raw_user_meta_data->>'role', '') in ('instructor','student') then
+    v_role := new.raw_user_meta_data->>'role';
+  end if;
+
+  insert into public.profiles (id, email, full_name, role)
+  values (new.id, new.email, coalesce(new.raw_user_meta_data->>'full_name', ''), v_role)
   on conflict (id) do nothing;
   return new;
 end;

@@ -10,6 +10,7 @@ export interface AuthUser {
   id: string
   email: string
   fullName?: string
+  role: 'instructor' | 'student'
 }
 
 /** getAccessToken returns the persisted Supabase access token, or null. */
@@ -22,12 +23,21 @@ export function getAccessToken(): string | null {
   }
 }
 
-/** getStoredUser returns the persisted user object, or null. */
+/** getStoredUser returns the persisted user object, or null. Older persisted
+ * sessions predating the role field default to 'student'. */
 export function getStoredUser(): AuthUser | null {
   if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(USER_KEY)
-    return raw ? (JSON.parse(raw) as AuthUser) : null
+    if (!raw) return null
+    const u = JSON.parse(raw) as Partial<AuthUser>
+    if (!u.id || !u.email) return null
+    return {
+      id: u.id,
+      email: u.email,
+      fullName: u.fullName,
+      role: u.role === 'instructor' ? 'instructor' : 'student',
+    }
   } catch {
     return null
   }
@@ -43,6 +53,16 @@ function persistSession(token: string, user: AuthUser) {
   }
 }
 
+/** persistUser updates only the stored user object (e.g. after a role refresh),
+ * leaving the existing token untouched. */
+export function persistUser(user: AuthUser) {
+  try {
+    localStorage.setItem(USER_KEY, JSON.stringify(user))
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
 /** clearSession removes persisted auth state (logout). */
 export function clearSession() {
   try {
@@ -51,6 +71,13 @@ export function clearSession() {
   } catch {
     /* ignore storage errors */
   }
+}
+
+/** roleFromMeta reads the instructor/student role from Supabase user metadata,
+ * defaulting to 'student'. */
+function roleFromMeta(user: { user_metadata?: Record<string, unknown> } | undefined): 'instructor' | 'student' {
+  const r = user?.user_metadata?.role
+  return r === 'instructor' ? 'instructor' : 'student'
 }
 
 /** register creates a new account and returns the session user. The new user's
@@ -68,19 +95,22 @@ export async function register(email: string, password: string, fullName: string
 
   const session = data.session
   if (session) {
+    const role = roleFromMeta(session.user)
     persistSession(session.access_token, {
       id: session.user.id,
       email: session.user.email ?? email,
       fullName,
+      role,
     })
-    return { id: session.user.id, email: email, fullName }
+    return { id: session.user.id, email: email, fullName, role }
   }
 
   // No session returned (some projects require confirmation); treat as a
   // provisional user so the UI can still proceed in auto-confirm mode.
   const user = data.user
   if (user) {
-    return { id: user.id, email: user.email ?? email, fullName }
+    const role = roleFromMeta(user)
+    return { id: user.id, email: user.email ?? email, fullName, role }
   }
   throw new Error('Signup returned no user or session.')
 }
@@ -97,17 +127,19 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   if (!session) throw new Error('Login returned no session.')
 
   const meta = session.user.user_metadata as { full_name?: string } | undefined
+  const role = roleFromMeta(session.user)
   persistSession(session.access_token, {
     id: session.user.id,
     email: session.user.email ?? email,
     fullName: meta?.full_name,
+    role,
   })
-  const user: AuthUser = {
+  return {
     id: session.user.id,
     email: session.user.email ?? email,
     fullName: meta?.full_name,
+    role,
   }
-  return user
 }
 
 /** logout clears the local session and signs out of Supabase Auth. */

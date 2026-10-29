@@ -86,3 +86,46 @@ func (h *ProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, saved)
 }
+
+// Promote flips the current user's global role to "instructor" when their
+// email is on the INSTRUCTOR_EMAILS allowlist. Registration stays student-only;
+// this is the manual promotion path.
+func (h *ProfileHandler) Promote(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserID(r.Context())
+	profile, err := h.repo.GetProfile(r.Context(), userID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "profile not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load profile")
+		return
+	}
+
+	if !h.emailAllowed(profile.Email) {
+		writeError(w, http.StatusForbidden, "email is not authorized for instructor access")
+		return
+	}
+
+	saved, err := h.repo.SetProfileRole(r.Context(), userID, models.RoleInstructor)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to promote profile")
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
+// emailAllowed reports whether the given email is on the configured instructor
+// allowlist. An empty allowlist means promotion is disabled.
+func (h *ProfileHandler) emailAllowed(email string) bool {
+	if len(h.cfg.InstructorEmails) == 0 {
+		return false
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	for _, allowed := range h.cfg.InstructorEmails {
+		if allowed == email {
+			return true
+		}
+	}
+	return false
+}

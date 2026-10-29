@@ -43,7 +43,7 @@ func main() {
 	courseHandler := handlers.NewCourseHandler(repo, formationService)
 	groupHandler := handlers.NewGroupHandler(repo)
 	fileHandler := handlers.NewFileHandler(repo, cfg)
-	profileHandler := handlers.NewProfileHandler(repo)
+	profileHandler := handlers.NewProfileHandler(repo, cfg)
 
 	// 4. Mount the router with method-based paths (Go 1.22+ pattern syntax).
 	mux := http.NewServeMux()
@@ -57,6 +57,7 @@ func main() {
 	// Profiles (self-service; email/password live in Supabase Auth).
 	mux.HandleFunc("GET /v1/profiles/me", profileHandler.Me)
 	mux.HandleFunc("PATCH /v1/profiles/me", profileHandler.Update)
+	mux.HandleFunc("POST /v1/profiles/me/promote", profileHandler.Promote)
 
 	// Courses.
 	mux.HandleFunc("GET /v1/courses", courseHandler.List)
