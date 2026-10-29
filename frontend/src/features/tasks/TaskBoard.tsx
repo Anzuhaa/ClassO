@@ -38,6 +38,18 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
     void load()
   }, [groupId])
 
+  // Live sync: poll every 4s so task status changes (Todo → In Progress →
+  // Done) reflect across all group members without a manual reload.
+  useEffect(() => {
+    const t = setInterval(() => {
+      void api
+        .listTasks(groupId)
+        .then((ts) => setTasks(ts ?? []))
+        .catch(() => {})
+    }, 4000)
+    return () => clearInterval(t)
+  }, [groupId])
+
   const move = async (task: Task, status: TaskStatus) => {
     // Optimistically update the local list.
     setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status } : t)))

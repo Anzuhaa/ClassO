@@ -5,7 +5,6 @@ export interface Profile {
   fullName: string
   email: string
   avatarUrl?: string
-  skills: string[]
   role: 'instructor' | 'student'
   createdAt: string
 }
@@ -15,8 +14,8 @@ export interface Course {
   name: string
   code?: string
   joinCode: string
+  joinCodeExpiresAt?: string
   ownerId: string
-  groupSize: number
   createdAt: string
   updatedAt: string
 }
@@ -27,7 +26,6 @@ export interface CourseMember {
   fullName: string
   email: string
   avatarUrl?: string
-  skills: string[]
   role: 'instructor' | 'student'
   createdAt: string
   courseRole: 'instructor' | 'student'
@@ -37,6 +35,7 @@ export interface Group {
   id: string
   courseId: string
   name: string
+  capacity: number
   createdAt: string
   memberCount?: number
 }
@@ -78,16 +77,7 @@ export interface Task {
   assigneeName?: string
 }
 
-export interface AISummary {
-  id: string
-  groupId: string
-  fromMessageId?: string
-  summary: string
-  createdAt: string
-}
-
 export interface FormationResult {
   courseId: string
   groups: Group[]
-  usedAi: boolean
 }

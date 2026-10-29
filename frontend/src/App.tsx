@@ -1,47 +1,53 @@
-// App shell: sidebar navigation, theme toggle, and the active workspace view.
-// Routing is a lightweight in-memory view switch (no router dependency).
-import { useCallback, useEffect, useState } from 'react'
+// App shell: auth gate + React Router. Real URL paths (/courses/:id,
+// /courses/:id/groups/:groupId) keep the view stable across refreshes.
+import { useEffect, useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { GraduationCap, Moon, Sun, BookOpen, Users } from 'lucide-react'
 import { useTheme } from './lib/theme'
 import { api } from './lib/api'
+import { getStoredUser, getAccessToken, type AuthUser } from './lib/auth'
 import type { Course } from './types'
 import { CourseList } from './features/courses/CourseList'
 import { CourseDetail } from './features/courses/CourseDetail'
 import { GroupWorkspace } from './features/groups/GroupWorkspace'
-import { ProfileSwitcher } from './features/profiles/ProfileSwitcher'
-
-type View =
-  | { name: 'courses' }
-  | { name: 'course'; courseId: string }
-  | { name: 'group'; groupId: string; courseId: string }
+import { AuthScreen } from './features/auth/AuthScreen'
+import { UserMenu } from './features/auth/UserMenu'
 
 export default function App() {
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    const token = getAccessToken()
+    const stored = getStoredUser()
+    return token ? stored : null
+  })
+
+  return (
+    <BrowserRouter>
+      {user ? (
+        <AuthenticatedApp user={user} onLogout={() => setUser(null)} />
+      ) : (
+        <AuthScreen onAuthed={setUser} />
+      )}
+    </BrowserRouter>
+  )
+}
+
+/** AuthenticatedApp renders the sidebar + routed views for a signed-in user. */
+function AuthenticatedApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const { theme, toggle } = useTheme()
-  const [view, setView] = useState<View>({ name: 'courses' })
+  const navigate = useNavigate()
   const [courses, setCourses] = useState<Course[]>([])
 
-  // Load courses on mount (and re-load when the profile changes) for the sidebar.
-  const refreshCourses = useCallback(async () => {
+  const refreshCourses = async () => {
     try {
       setCourses(await api.listCourses())
     } catch {
-      /* backend may be down during local dev; keep UI usable */
+      /* backend may be down during local dev */
     }
-  }, [])
+  }
 
   useEffect(() => {
     void refreshCourses()
-  }, [refreshCourses])
-
-  // Re-fetch courses when the active profile changes (Feature 1 switcher).
-  useEffect(() => {
-    const onProfileChange = () => {
-      setView({ name: 'courses' })
-      void refreshCourses()
-    }
-    window.addEventListener('classo:profile-changed', onProfileChange)
-    return () => window.removeEventListener('classo:profile-changed', onProfileChange)
-  }, [refreshCourses])
+  }, [user.id])
 
   return (
     <div className="flex h-full">
@@ -61,22 +67,22 @@ export default function App() {
           <SidebarItem
             icon={<BookOpen size={18} />}
             label="My Courses"
-            active={view.name === 'courses'}
-            onClick={() => setView({ name: 'courses' })}
+            active={location.pathname === '/courses'}
+            onClick={() => navigate('/courses')}
           />
           {courses.map((c) => (
             <SidebarItem
               key={c.id}
               icon={<Users size={18} />}
               label={c.name}
-              active={view.name === 'course' && view.courseId === c.id}
-              onClick={() => setView({ name: 'course', courseId: c.id })}
+              active={location.pathname === `/courses/${c.id}`}
+              onClick={() => navigate(`/courses/${c.id}`)}
             />
           ))}
         </nav>
 
         <div className="mt-auto space-y-2">
-          <ProfileSwitcher />
+          <UserMenu user={user} onLogout={onLogout} />
           <button
             onClick={toggle}
             className="btn-ghost inline-flex w-full items-center justify-center gap-2 px-3 py-2 text-sm"
@@ -91,19 +97,16 @@ export default function App() {
       {/* ---- Main content ---- */}
       <main className="flex-1 overflow-auto p-4 md:p-8">
         <div className="mx-auto max-w-6xl">
-          {view.name === 'courses' && (
-            <CourseList onOpen={(courseId) => setView({ name: 'course', courseId })} onCreated={refreshCourses} />
-          )}
-          {view.name === 'course' && (
-            <CourseDetail
-              courseId={view.courseId}
-              onBack={() => setView({ name: 'courses' })}
-              onOpenGroup={(groupId) => setView({ name: 'group', groupId, courseId: view.courseId })}
+          <Routes>
+            <Route path="/" element={<Navigate to="/courses" replace />} />
+            <Route path="/courses" element={<CourseList onCreated={refreshCourses} />} />
+            <Route path="/courses/:courseId" element={<CourseDetail />} />
+            <Route
+              path="/courses/:courseId/groups/:groupId"
+              element={<GroupWorkspace />}
             />
-          )}
-          {view.name === 'group' && (
-            <GroupWorkspace groupId={view.groupId} onBack={() => setView({ name: 'course', courseId: view.courseId })} />
-          )}
+            <Route path="*" element={<Navigate to="/courses" replace />} />
+          </Routes>
         </div>
       </main>
     </div>

@@ -1,7 +1,9 @@
 // Thin typed fetch wrapper for the ClassO Go backend. All calls go through the
 // Vite dev proxy (/v1 -> localhost:8080) so no CORS or base URL is needed.
+//
+// Auth: the Supabase access token is read from localStorage and injected as a
+// Bearer token on every request (see auth.ts for how it is set/cleared).
 import type {
-  AISummary,
   Course,
   CourseMember,
   FormationResult,
@@ -12,33 +14,9 @@ import type {
   TaskStatus,
   VaultFile,
 } from '../types'
+import { getAccessToken } from './auth'
 
 const BASE = '/v1'
-
-// Fallback demo user id used when no profile has been selected yet.
-export const demoUserId = '00000000-0000-0000-0000-000000000001'
-
-const PROFILE_KEY = 'classo.activeProfileId'
-
-/** activeUserId returns the id persisted by the profile switcher, or the demo
- * fallback. ApiError methods send this as the X-User-ID header. */
-export function activeUserId(): string {
-  if (typeof window === 'undefined') return demoUserId
-  try {
-    return localStorage.getItem(PROFILE_KEY) || demoUserId
-  } catch {
-    return demoUserId
-  }
-}
-
-/** setActiveUserId persists the chosen profile id for subsequent requests. */
-export function setActiveUserId(id: string) {
-  try {
-    localStorage.setItem(PROFILE_KEY, id)
-  } catch {
-    /* ignore storage errors (private mode) */
-  }
-}
 
 /** ApiError is thrown on a non-2xx response with the server's error message. */
 export class ApiError extends Error {
@@ -51,14 +29,14 @@ export class ApiError extends Error {
 
 /** request performs a JSON request and parses the typed JSON response. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-ID': activeUserId(),
-      ...(init?.headers ?? {}),
-    },
-  })
+  const token = getAccessToken()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init?.headers as Record<string, string> | undefined),
+  }
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const res = await fetch(`${BASE}${path}`, { ...init, headers })
 
   if (!res.ok) {
     let message = `Request failed (${res.status})`
@@ -78,22 +56,33 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   // Profiles
-  listProfiles: () => request<Profile[]>('/profiles'),
   getMe: () => request<Profile>('/profiles/me'),
-  createProfile: (body: { fullName: string; role: 'instructor' | 'student'; skills: string[] }) =>
-    request<Profile>('/profiles', { method: 'POST', body: JSON.stringify(body) }),
+  updateMe: (body: { fullName?: string; role?: 'instructor' | 'student' }) =>
+    request<Profile>('/profiles/me', { method: 'PATCH', body: JSON.stringify(body) }),
 
   // Courses
   listCourses: () => request<Course[]>('/courses'),
   getCourse: (courseId: string) => request<Course>(`/courses/${courseId}`),
-  createCourse: (body: { name: string; code?: string; groupSize: number }) =>
+  createCourse: (body: { name: string; code?: string }) =>
     request<Course>('/courses', { method: 'POST', body: JSON.stringify(body) }),
+  deleteCourse: (courseId: string) =>
+    request<{ status: string }>(`/courses/${courseId}`, { method: 'DELETE' }),
   joinCourse: (joinCode: string) =>
     request<Course>('/courses/join', { method: 'POST', body: JSON.stringify({ joinCode }) }),
-  formGroups: (courseId: string) =>
-    request<FormationResult>(`/courses/${courseId}/form`, { method: 'POST' }),
-  randomAssign: (courseId: string) =>
-    request<FormationResult>(`/courses/${courseId}/random-assign`, { method: 'POST' }),
+  regenerateJoinCode: (courseId: string) =>
+    request<Course>(`/courses/${courseId}/join-code`, { method: 'POST' }),
+  expireJoinCode: (courseId: string) =>
+    request<Course>(`/courses/${courseId}/join-code`, { method: 'DELETE' }),
+  randomAssign: (courseId: string, capacity: number) =>
+    request<FormationResult>(`/courses/${courseId}/random-assign`, {
+      method: 'POST',
+      body: JSON.stringify({ capacity }),
+    }),
+  createGroups: (courseId: string, body: { name: string; capacity: number; count: number }) =>
+    request<Group[]>(`/courses/${courseId}/groups`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   listGroups: (courseId: string) => request<Group[]>(`/courses/${courseId}/groups`),
   listCourseMembers: (courseId: string) => request<CourseMember[]>(`/courses/${courseId}/members`),
   myGroup: (courseId: string) => request<{ groupId: string }>(`/courses/${courseId}/my-group`),
@@ -102,11 +91,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ userId, role }),
     }),
+  removeCourseMember: (courseId: string, userId: string) =>
+    request(`/courses/${courseId}/members`, {
+      method: 'DELETE',
+      body: JSON.stringify({ userId }),
+    }),
 
   // Group workspace
   listMembers: (groupId: string) => request<Profile[]>(`/groups/${groupId}/members`),
   joinGroup: (groupId: string) =>
     request<{ status: string; groupId: string }>(`/groups/${groupId}/join`, { method: 'POST' }),
+  leaveGroup: (groupId: string) =>
+    request<{ status: string }>(`/groups/${groupId}/leave`, { method: 'POST' }),
+  removeGroupMember: (groupId: string, userId: string) =>
+    request<{ status: string }>(`/groups/${groupId}/members`, {
+      method: 'DELETE',
+      body: JSON.stringify({ userId }),
+    }),
+  deleteGroup: (groupId: string) =>
+    request<{ status: string }>(`/groups/${groupId}`, { method: 'DELETE' }),
   listMessages: (groupId: string) => request<Message[]>(`/groups/${groupId}/messages`),
   sendMessage: (groupId: string, content: string) =>
     request<Message>(`/groups/${groupId}/messages`, {
@@ -128,19 +131,23 @@ export const api = {
       body: JSON.stringify({ status }),
     }),
   listFiles: (groupId: string) => request<VaultFile[]>(`/groups/${groupId}/files`),
+  fileUrl: (groupId: string, fileId: string) =>
+    request<{ url: string; name: string; mimeType: string }>(
+      `/groups/${groupId}/files/${fileId}/url`,
+    ),
   // Multipart upload (not JSON, so it bypasses the JSON request helper).
   uploadFile: async (groupId: string, file: File): Promise<VaultFile> => {
     const form = new FormData()
     form.append('file', file)
+    const token = getAccessToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
     const res = await fetch(`${BASE}/groups/${groupId}/files`, {
       method: 'POST',
-      headers: { 'X-User-ID': activeUserId() },
+      headers,
       body: form,
     })
     if (!res.ok) throw new ApiError(res.status, `Upload failed (${res.status})`)
     return res.json()
   },
-  summarize: (groupId: string) =>
-    request<AISummary>(`/groups/${groupId}/summary`, { method: 'POST' }),
-  latestSummary: (groupId: string) => request<AISummary | null>(`/groups/${groupId}/summary`),
 }

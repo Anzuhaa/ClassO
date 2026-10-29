@@ -1,27 +1,27 @@
-// CourseList: the dashboard home showing all courses plus a create/join form.
+// CourseList: the dashboard home showing all courses plus create/join forms
+// and per-course delete (with confirmation).
 import { useEffect, useState } from 'react'
-import { Plus, Users, LogIn, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Plus, Users, LogIn, X, ClipboardPaste, Trash2 } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
+import { getStoredUser } from '../../lib/auth'
 import type { Course } from '../../types'
 import { GlassCard, Button, Input, Label, Spinner } from '../../components/ui'
 
-export function CourseList({
-  onOpen,
-  onCreated,
-}: {
-  onOpen: (courseId: string) => void
-  onCreated: () => void
-}) {
+export function CourseList({ onCreated }: { onCreated: () => void }) {
+  const navigate = useNavigate()
   const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [showJoin, setShowJoin] = useState(false)
 
+  // The current user's global role (drives whether "New Course" is shown).
+  const [isInstructor, setIsInstructor] = useState(false)
+
   // Form state.
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
-  const [groupSize, setGroupSize] = useState(4)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
 
@@ -29,6 +29,12 @@ export function CourseList({
   const [joinCode, setJoinCode] = useState('')
   const [joining, setJoining] = useState(false)
   const [joinError, setJoinError] = useState('')
+
+  // Delete state.
+  const [deleteTarget, setDeleteTarget] = useState<Course | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  const userId = getStoredUser()?.id ?? ''
 
   const load = async () => {
     setLoading(true)
@@ -46,22 +52,25 @@ export function CourseList({
     void load()
   }, [])
 
+  // Load the profile role once so instructor-only actions are gated correctly.
+  useEffect(() => {
+    api
+      .getMe()
+      .then((p) => setIsInstructor(p.role === 'instructor'))
+      .catch(() => setIsInstructor(false))
+  }, [])
+
   const create = async () => {
     setFormError('')
     if (!name.trim()) {
       setFormError('Course name is required.')
       return
     }
-    if (groupSize < 1) {
-      setFormError('Group size must be at least 1.')
-      return
-    }
     setSubmitting(true)
     try {
-      await api.createCourse({ name: name.trim(), code: code.trim() || undefined, groupSize })
+      await api.createCourse({ name: name.trim(), code: code.trim() || undefined })
       setName('')
       setCode('')
-      setGroupSize(4)
       setShowForm(false)
       await load()
       onCreated()
@@ -92,6 +101,33 @@ export function CourseList({
     }
   }
 
+  // Paste from clipboard (Feature 4) — reads text and sets the join code.
+  const pasteCode = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      const code = text.trim().toUpperCase().slice(0, 6)
+      if (code) setJoinCode(code)
+    } catch {
+      setJoinError('Clipboard unavailable — paste manually.')
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await api.deleteCourse(deleteTarget.id)
+      setDeleteTarget(null)
+      await load()
+      onCreated()
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to delete course')
+      setDeleteTarget(null)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between">
@@ -104,25 +140,24 @@ export function CourseList({
             <LogIn size={16} />
             Join Course
           </Button>
-          <Button onClick={() => setShowForm((s) => !s)}>
-            <Plus size={16} />
-            New Course
-          </Button>
+          {isInstructor && (
+            <Button onClick={() => setShowForm((s) => !s)}>
+              <Plus size={16} />
+              New Course
+            </Button>
+          )}
         </div>
       </header>
 
       {showForm && (
         <GlassCard className="p-5 space-y-4 animate-fade-in">
           <h3 className="text-lg font-semibold">Create a course</h3>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2">
             <Label text="Course name">
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Rekayasa Perangkat Lunak" />
             </Label>
             <Label text="Code (optional)">
               <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="IF4020" />
-            </Label>
-            <Label text="Members per group">
-              <Input type="number" min={1} value={groupSize} onChange={(e) => setGroupSize(Number(e.target.value))} />
             </Label>
           </div>
           {formError && <p className="text-sm text-red-500">{formError}</p>}
@@ -149,19 +184,46 @@ export function CourseList({
               </button>
             </div>
             <Label text="Join code">
-              <Input
-                value={joinCode}
-                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                placeholder="CLS482"
-                className="font-mono tracking-widest"
-                maxLength={6}
-              />
+              <div className="flex gap-2">
+                <Input
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  placeholder="CLS482"
+                  className="font-mono tracking-widest"
+                  maxLength={6}
+                />
+                <Button variant="ghost" onClick={pasteCode} className="px-3" aria-label="Paste from clipboard">
+                  <ClipboardPaste size={16} />
+                </Button>
+              </div>
             </Label>
             {joinError && <p className="text-sm text-red-500">{joinError}</p>}
             <Button onClick={join} disabled={joining} className="w-full">
               {joining ? <Spinner /> : <LogIn size={16} />}
               Join
             </Button>
+          </GlassCard>
+        </div>
+      )}
+
+      {/* ---- Delete confirmation modal ---- */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setDeleteTarget(null)}>
+          <GlassCard strong className="w-full max-w-sm p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold">Delete course?</h3>
+            <p className="text-sm text-[var(--text-secondary)]">
+              This permanently deletes <span className="font-semibold text-[var(--text)]">{deleteTarget.name}</span> and
+              all its groups, members, chat, tasks, and files. This cannot be undone.
+            </p>
+            <div className="flex gap-2">
+              <Button onClick={confirmDelete} disabled={deleting} className="!bg-red-600">
+                {deleting ? <Spinner /> : <Trash2 size={16} />}
+                Delete
+              </Button>
+              <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
+                Cancel
+              </Button>
+            </div>
           </GlassCard>
         </div>
       )}
@@ -181,24 +243,32 @@ export function CourseList({
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {courses.map((c) => (
-            <GlassCard
-              key={c.id}
-              className="group cursor-pointer p-5 transition-transform hover:-translate-y-0.5"
-              onClick={() => onOpen(c.id)}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="font-semibold">{c.name}</h3>
-                  <p className="text-sm text-[var(--text-secondary)]">{c.code || `Join: ${c.joinCode}`}</p>
+            <div key={c.id} className="relative">
+              <GlassCard
+                className="group cursor-pointer p-5 transition-transform hover:-translate-y-0.5"
+                onClick={() => navigate(`/courses/${c.id}`)}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="font-semibold">{c.name}</h3>
+                    <p className="text-sm text-[var(--text-secondary)]">{c.code || `Join: ${c.joinCode}`}</p>
+                  </div>
+                  <Users size={20} className="text-[var(--text-tertiary)]" />
                 </div>
-                <Users size={20} className="text-[var(--text-tertiary)]" />
-              </div>
-              <div className="mt-4 flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
-                <span className="rounded-full bg-[var(--accent)]/10 px-2 py-0.5 font-medium text-[var(--accent)]">
-                  {c.groupSize} / group
-                </span>
-              </div>
-            </GlassCard>
+              </GlassCard>
+              {c.ownerId === userId && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setDeleteTarget(c)
+                  }}
+                  className="absolute right-2 top-2 rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-red-500"
+                  aria-label={`Delete ${c.name}`}
+                >
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}

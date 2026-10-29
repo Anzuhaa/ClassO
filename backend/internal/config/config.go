@@ -1,7 +1,7 @@
 // Package config loads environment configuration for the ClassO backend.
 //
-// It centralizes all runtime settings (Supabase database, ModelScope AI,
-// and HTTP server) so the rest of the application reads plain struct fields
+// It centralizes all runtime settings (Supabase database, auth, storage, and
+// HTTP server) so the rest of the application reads plain struct fields
 // instead of touching os.Getenv directly.
 package config
 
@@ -19,12 +19,9 @@ type Config struct {
 
 	// Supabase project details (for JWT verification and storage).
 	SupabaseURL        string // e.g. https://xyz.supabase.co
-	SupabaseAnonKey    string // public anon key (used for JWT signing secret fallback)
+	SupabaseAnonKey    string // public anon key
+	SupabaseJWTSecret  string // HS256 signing secret used to verify auth JWTs
 	SupabaseServiceKey string // service-role key, used server-side for storage admin ops
-
-	// ModelScope AI service.
-	ModelScopeAPIKey string
-	ModelScopeModel  string // e.g. deepseek-ai/DeepSeek-V4-Pro-0813
 
 	// Feature toggles.
 	AllowNoAuth bool // when true, seed a demo user so the app runs without Supabase Auth
@@ -37,18 +34,13 @@ func Load() (*Config, error) {
 		DatabaseURL:        env("DATABASE_URL", ""),
 		SupabaseURL:        env("SUPABASE_URL", ""),
 		SupabaseAnonKey:    env("SUPABASE_ANON_KEY", ""),
+		SupabaseJWTSecret:  env("SUPABASE_JWT_SECRET", ""),
 		SupabaseServiceKey: env("SUPABASE_SERVICE_KEY", ""),
-		ModelScopeAPIKey:   env("MODELSCOPE_API_KEY", ""),
-		ModelScopeModel:    env("MODELSCOPE_MODEL", "deepseek-ai/DeepSeek-V4-Pro-0813"),
 		AllowNoAuth:        env("ALLOW_NO_AUTH", "false") == "true",
 	}
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required (Supabase Postgres connection string)")
-	}
-
-	if cfg.ModelScopeAPIKey == "" {
-		return nil, fmt.Errorf("MODELSCOPE_API_KEY is required for AI group balancing and summaries")
 	}
 
 	return cfg, nil

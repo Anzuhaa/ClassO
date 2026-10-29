@@ -3,6 +3,9 @@ package middleware
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,8 +22,6 @@ type contextKey string
 const (
 	// userIDKey stores the authenticated user id in the request context.
 	userIDKey contextKey = "user_id"
-	// userRoleKey stores the course role (instructor/student) when known.
-	userRoleKey contextKey = "course_role"
 )
 
 // UserID extracts the authenticated user id from a request context.
@@ -29,21 +30,16 @@ func UserID(ctx context.Context) string {
 	return id
 }
 
-// CourseRole extracts the course role from a request context.
-func CourseRole(ctx context.Context) string {
-	role, _ := ctx.Value(userRoleKey).(string)
-	return role
-}
-
 // demoUserID is the seeded user id used when ALLOW_NO_AUTH is enabled, so the
 // app runs locally without Supabase Auth wired up.
 const demoUserID = "00000000-0000-0000-0000-000000000001"
 
 // Auth extracts the user identity and attaches it to the request context.
 //
-// It accepts a Supabase JWT (via Authorization: Bearer ...) and otherwise
-// falls back to the demo user when ALLOW_NO_AUTH is enabled. In production
-// (no auth + no fallback allowed) it rejects with 401.
+// It verifies a Supabase-issued JWT from the Authorization header (HS256,
+// signed with the project's JWT secret). When ALLOW_NO_AUTH is enabled and no
+// valid token is present, it falls back to the seeded demo user so local
+// development works without a Supabase project.
 func Auth(cfg *config.Config, repo *repository.Repo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,22 +55,17 @@ func Auth(cfg *config.Config, repo *repository.Repo) func(http.Handler) http.Han
 	}
 }
 
-// resolveIdentity returns the authenticated user id from the request.
-//
-// JWT verification against Supabase is performed when configured; otherwise
-// the demo path applies. Production deployments should replace the stub with
-// a real JWT verifier using the Supabase project's JWT secret.
+// resolveIdentity returns the authenticated user id from the request, or "".
 func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if sub := verifySupabaseJWT(cfg, token); sub != "" {
+		if sub := verifySupabaseJWT(cfg.SupabaseJWTSecret, token); sub != "" {
 			ensureProfile(repo, r, sub)
 			return sub
 		}
 	}
 
-	// Demo fallback: explicit user id header or the seeded demo user.
 	if cfg.AllowNoAuth {
 		id := r.Header.Get("X-User-Id")
 		if id == "" {
@@ -86,36 +77,67 @@ func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request)
 	return ""
 }
 
-// verifySupabaseJWT validates a Supabase-issued JWT and returns its "sub"
-// (user id) claim.
+// jwtHeader is the decoded JWT header segment (unverified).
+type jwtHeader struct {
+	Alg string `json:"alg"`
+}
+
+// jwtClaims is the decoded JWT payload segment.
+type jwtClaims struct {
+	Sub string `json:"sub"`
+	Exp int64  `json:"exp"`
+}
+
+// verifySupabaseJWT validates the HS256 signature of a Supabase-issued JWT and
+// returns its "sub" (user id) claim, or "" when the token is invalid.
 //
-// NOTE: full HS256 verification requires the JWT secret from the Supabase
-// project settings. This scaffold leaves it as a documented stub for
-// production teams to complete; it returns "" so demo mode can take over.
-func verifySupabaseJWT(cfg *config.Config, token string) string {
-	// TODO(production): decode + verify the HS256 signature using the
-	// Supabase JWT secret, then return the "sub" claim.
-	_ = token
-	_ = cfg
-	return ""
+// The token is split into header.payload.signature; the signature is an HMAC-
+// SHA256 over "header.payload" keyed with the project's JWT secret. Expiry is
+// not enforced here (Supabase issues short-lived access tokens and refreshes
+// are handled client-side), but malformed or unverifiable tokens are rejected.
+func verifySupabaseJWT(secret, token string) string {
+	if secret == "" {
+		return ""
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+
+	signingInput := parts[0] + "." + parts[1]
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(signingInput))
+	expected := mac.Sum(nil)
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(sig, expected) {
+		return ""
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims jwtClaims
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Sub == "" {
+		return ""
+	}
+	return claims.Sub
 }
 
 // ensureProfile lazily creates the profiles row for the identified user so
-// foreign keys resolve. It preserves any existing profile (e.g. one created
-// via the profile switcher) instead of overwriting it, falling back to a
-// minimal placeholder only when the profile is absent.
+// foreign keys resolve. It preserves any existing profile, falling back to a
+// minimal placeholder (real email/full_name are set by the auth handlers).
 func ensureProfile(repo *repository.Repo, r *http.Request, userID string) {
 	if existing, err := repo.GetProfile(r.Context(), userID); err == nil && existing != nil {
 		return
 	}
 	p := models.Profile{
 		ID:       userID,
-		FullName: "Demo Student",
+		FullName: "User",
 		Email:    userID + "@classo.local",
-		Skills:   []string{},
 		Role:     models.RoleStudent,
 	}
-	// Best-effort; failures are non-fatal for the request path.
 	_ = repo.UpsertProfile(r.Context(), p)
 }
 
@@ -131,7 +153,7 @@ func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-User-ID")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

@@ -1,5 +1,6 @@
 // GroupWorkspace: the group workspace shell with Tasks / Chat / Vault tabs.
 import { useEffect, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckSquare, MessageSquare, FolderOpen } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { Profile } from '../../types'
@@ -16,7 +17,9 @@ const TABS: { id: Tab; label: string; icon: typeof CheckSquare }[] = [
   { id: 'vault', label: 'File Vault', icon: FolderOpen },
 ]
 
-export function GroupWorkspace({ groupId, onBack }: { groupId: string; onBack: () => void }) {
+export function GroupWorkspace() {
+  const { courseId = '', groupId = '' } = useParams()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('tasks')
   const [members, setMembers] = useState<Profile[]>([])
 
@@ -32,7 +35,7 @@ export function GroupWorkspace({ groupId, onBack }: { groupId: string; onBack: (
     <div className="space-y-6">
       <header>
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="btn-ghost p-2" aria-label="Back">
+          <button onClick={() => navigate(`/courses/${courseId}`)} className="btn-ghost p-2" aria-label="Back">
             <ArrowLeft size={18} />
           </button>
           <h2 className="text-2xl font-bold">Group Workspace</h2>
@@ -78,9 +81,7 @@ export function GroupWorkspace({ groupId, onBack }: { groupId: string; onBack: (
                 </span>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{m.fullName || m.email}</p>
-                  {m.skills.length > 0 && (
-                    <p className="truncate text-xs text-[var(--text-tertiary)]">{m.skills.join(', ')}</p>
-                  )}
+                  <p className="truncate text-xs text-[var(--text-tertiary)]">{m.role}</p>
                 </div>
               </li>
             ))}

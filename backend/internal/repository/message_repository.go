@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/classo/backend/internal/models"
-	"github.com/jackc/pgx/v5"
 )
 
 // CreateMessage inserts a chat message and returns it with id/timestamp.
@@ -51,43 +50,4 @@ func (r *Repo) ListMessages(ctx context.Context, groupID string, limit int) ([]m
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, rows.Err()
-}
-
-// ListRecentMessagesForSummary returns the most recent N messages (oldest
-// first) feeding the AI summary prompt; excludes id timestamps for brevity.
-func (r *Repo) ListRecentMessagesForSummary(ctx context.Context, groupID string, limit int) ([]models.Message, error) {
-	return r.ListMessages(ctx, groupID, limit)
-}
-
-// CreateAISummary stores a generated summary linked to the message it covers.
-func (r *Repo) CreateAISummary(ctx context.Context, s models.AISummary) (*models.AISummary, error) {
-	row := r.Pool.QueryRow(ctx, `
-		INSERT INTO ai_summaries (group_id, from_message_id, summary)
-		VALUES ($1, $2, $3)
-		RETURNING id, group_id, from_message_id, summary, created_at
-	`, s.GroupID, s.FromMessageID, s.Summary)
-
-	var out models.AISummary
-	if err := row.Scan(&out.ID, &out.GroupID, &out.FromMessageID, &out.Summary, &out.CreatedAt); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// GetLatestSummary returns the most recent summary for a group, if any.
-func (r *Repo) GetLatestSummary(ctx context.Context, groupID string) (*models.AISummary, error) {
-	row := r.Pool.QueryRow(ctx, `
-		SELECT id, group_id, from_message_id, summary, created_at
-		FROM ai_summaries WHERE group_id = $1
-		ORDER BY created_at DESC LIMIT 1
-	`, groupID)
-
-	var s models.AISummary
-	if err := row.Scan(&s.ID, &s.GroupID, &s.FromMessageID, &s.Summary, &s.CreatedAt); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &s, nil
 }

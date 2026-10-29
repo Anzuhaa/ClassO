@@ -8,19 +8,55 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// CreateGroupWithMembers inserts a group and its members atomically. The
-// first member in memberIDs becomes the group lead; the rest are members.
+// CreateGroup inserts a single (possibly empty) group with a capacity. Used for
+// manual group setup by instructors.
+func (r *Repo) CreateGroup(ctx context.Context, g models.Group) (*models.Group, error) {
+	row := r.Pool.QueryRow(ctx, `
+		INSERT INTO groups (course_id, name, capacity)
+		VALUES ($1, $2, $3)
+		RETURNING id, course_id, name, capacity, created_at
+	`, g.CourseID, g.Name, g.Capacity)
+
+	var out models.Group
+	if err := row.Scan(&out.ID, &out.CourseID, &out.Name, &out.Capacity, &out.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CreateGroups inserts multiple groups, all with the same capacity, returning
+// them in insertion order. Used to create several empty groups at once. Names
+// are suffixed ("Group 1", "Group 2", …) when more than one is requested.
+func (r *Repo) CreateGroups(ctx context.Context, courseID, baseName string, capacity, count int) ([]models.Group, error) {
+	groups := make([]models.Group, 0, count)
+	for i := 0; i < count; i++ {
+		name := baseName
+		if count > 1 {
+			name = baseName + " " + itoa(i+1)
+		}
+		g, err := r.CreateGroup(ctx, models.Group{CourseID: courseID, Name: name, Capacity: capacity})
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, *g)
+	}
+	return groups, nil
+}
+
+// CreateGroupWithMembers inserts a group, its members, and (atomically) the
+// members' course_id denormalization so the one-group-per-course unique
+// constraint holds. The first member in memberIDs becomes the group lead.
 func (r *Repo) CreateGroupWithMembers(ctx context.Context, g models.Group, memberIDs []string) (*models.Group, error) {
 	var created *models.Group
 	err := r.tx(ctx, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			INSERT INTO groups (course_id, name)
-			VALUES ($1, $2)
-			RETURNING id, course_id, name, created_at
-		`, g.CourseID, g.Name)
+			INSERT INTO groups (course_id, name, capacity)
+			VALUES ($1, $2, $3)
+			RETURNING id, course_id, name, capacity, created_at
+		`, g.CourseID, g.Name, g.Capacity)
 
 		var out models.Group
-		if err := row.Scan(&out.ID, &out.CourseID, &out.Name, &out.CreatedAt); err != nil {
+		if err := row.Scan(&out.ID, &out.CourseID, &out.Name, &out.Capacity, &out.CreatedAt); err != nil {
 			return err
 		}
 
@@ -30,9 +66,9 @@ func (r *Repo) CreateGroupWithMembers(ctx context.Context, g models.Group, membe
 				role = models.RoleLead
 			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO group_members (group_id, user_id, role)
-				VALUES ($1, $2, $3)
-			`, out.ID, uid, role); err != nil {
+				INSERT INTO group_members (group_id, course_id, user_id, role)
+				VALUES ($1, $2, $3, $4)
+			`, out.ID, g.CourseID, uid, role); err != nil {
 				return err
 			}
 		}
@@ -47,11 +83,10 @@ func (r *Repo) CreateGroupWithMembers(ctx context.Context, g models.Group, membe
 }
 
 // ListGroups returns all groups in a course with their membership counts,
-// ordered by creation time so the dashboard can render a stable list. The
-// count lets the frontend disable "Join Group" once a group is full.
+// ordered by creation time so the dashboard renders a stable list.
 func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group, error) {
 	rows, err := r.Pool.Query(ctx, `
-		SELECT g.id, g.course_id, g.name, g.created_at, COUNT(gm.id)
+		SELECT g.id, g.course_id, g.name, g.capacity, g.created_at, COUNT(gm.id)
 		FROM groups g
 		LEFT JOIN group_members gm ON gm.group_id = g.id
 		WHERE g.course_id = $1
@@ -66,7 +101,7 @@ func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group,
 	out := make([]models.Group, 0)
 	for rows.Next() {
 		var g models.Group
-		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.CreatedAt, &g.MemberCount); err != nil {
+		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.Capacity, &g.CreatedAt, &g.MemberCount); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -77,12 +112,12 @@ func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group,
 // GetGroup fetches a single group by id.
 func (r *Repo) GetGroup(ctx context.Context, id string) (*models.Group, error) {
 	row := r.Pool.QueryRow(ctx, `
-		SELECT id, course_id, name, created_at FROM groups WHERE id = $1
+		SELECT id, course_id, name, capacity, created_at FROM groups WHERE id = $1
 	`, id)
 
 	var g models.Group
-	if err := row.Scan(&g.ID, &g.CourseID, &g.Name, &g.CreatedAt); err != nil {
-		if err == pgx.ErrNoRows {
+	if err := row.Scan(&g.ID, &g.CourseID, &g.Name, &g.Capacity, &g.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
@@ -127,8 +162,7 @@ func (r *Repo) GroupInCourseForUser(ctx context.Context, courseID, userID string
 	err := r.Pool.QueryRow(ctx, `
 		SELECT gm.group_id
 		FROM group_members gm
-		JOIN groups g ON g.id = gm.group_id
-		WHERE g.course_id = $1 AND gm.user_id = $2
+		WHERE gm.course_id = $1 AND gm.user_id = $2
 		LIMIT 1
 	`, courseID, userID).Scan(&groupID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -137,15 +171,16 @@ func (r *Repo) GroupInCourseForUser(ctx context.Context, courseID, userID string
 	return groupID, err
 }
 
-// JoinGroup adds a user to a group as a "member", enforcing (via UNIQUE
-// constraint) that a user is not double-added to the same group. Callers must
-// check GroupInCourseForUser first to honor the one-group-per-course rule.
-func (r *Repo) JoinGroup(ctx context.Context, groupID, userID string) error {
+// JoinGroup adds a user to a group as a "member". The UNIQUE (course_id,
+// user_id) constraint on group_members enforces the one-group-per-course rule
+// at the database level; this returns the raw conflict so callers can surface a
+// friendly message. Callers should also check capacity before joining.
+func (r *Repo) JoinGroup(ctx context.Context, groupID, courseID, userID string) error {
 	_, err := r.Pool.Exec(ctx, `
-		INSERT INTO group_members (group_id, user_id, role)
-		VALUES ($1, $2, $3)
+		INSERT INTO group_members (group_id, course_id, user_id, role)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (group_id, user_id) DO NOTHING
-	`, groupID, userID, models.RoleMember)
+	`, groupID, courseID, userID, models.RoleMember)
 	return err
 }
 
@@ -164,11 +199,39 @@ func (r *Repo) IsGroupMember(ctx context.Context, groupID, userID string) (bool,
 	return exists, err
 }
 
-// GetGroupsForUser returns the groups a user belongs to, for the user's
-// workspace switcher.
+// RemoveGroupMember removes a user from a group (instructor or self-leave).
+// Returns ErrNotFound when the membership did not exist.
+func (r *Repo) RemoveGroupMember(ctx context.Context, groupID, userID string) error {
+	cmd, err := r.Pool.Exec(ctx, `
+		DELETE FROM group_members WHERE group_id = $1 AND user_id = $2
+	`, groupID, userID)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteGroup removes a group (and its messages/files/tasks via FK cascade).
+// Returns ErrNotFound when the group does not exist.
+func (r *Repo) DeleteGroup(ctx context.Context, groupID string) error {
+	cmd, err := r.Pool.Exec(ctx, `DELETE FROM groups WHERE id = $1`, groupID)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetGroupsForUser returns the groups a user belongs to, for the workspace
+// switcher.
 func (r *Repo) GetGroupsForUser(ctx context.Context, userID string) ([]models.Group, error) {
 	rows, err := r.Pool.Query(ctx, `
-		SELECT g.id, g.course_id, g.name, g.created_at
+		SELECT g.id, g.course_id, g.name, g.capacity, g.created_at
 		FROM groups g
 		JOIN group_members gm ON gm.group_id = g.id
 		WHERE gm.user_id = $1
@@ -182,10 +245,25 @@ func (r *Repo) GetGroupsForUser(ctx context.Context, userID string) ([]models.Gr
 	out := make([]models.Group, 0)
 	for rows.Next() {
 		var g models.Group
-		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.CourseID, &g.Name, &g.Capacity, &g.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
 	}
 	return out, rows.Err()
+}
+
+// itoa formats a small non-negative integer without importing strconv.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var digits [20]byte
+	i := len(digits)
+	for n > 0 {
+		i--
+		digits[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(digits[i:])
 }

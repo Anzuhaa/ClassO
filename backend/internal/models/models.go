@@ -12,21 +12,20 @@ type Profile struct {
 	FullName  string    `json:"fullName"`
 	Email     string    `json:"email"`
 	AvatarURL string    `json:"avatarUrl,omitempty"`
-	Skills    []string  `json:"skills"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
 // Course mirrors the courses table.
 type Course struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Code      string    `json:"code,omitempty"`
-	JoinCode  string    `json:"joinCode"`
-	OwnerID   string    `json:"ownerId"`
-	GroupSize int       `json:"groupSize"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Code             string     `json:"code,omitempty"`
+	JoinCode         string     `json:"joinCode"`
+	JoinCodeExpiresAt *time.Time `json:"joinCodeExpiresAt,omitempty"`
+	OwnerID          string     `json:"ownerId"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // CourseMember mirrors course_members; Role is "instructor" or "student".
@@ -42,6 +41,7 @@ type Group struct {
 	ID        string    `json:"id"`
 	CourseID  string    `json:"courseId"`
 	Name      string    `json:"name"`
+	Capacity  int       `json:"capacity"`
 	CreatedAt time.Time `json:"createdAt"`
 
 	// MemberCount is the number of current members, populated for list views
@@ -52,10 +52,11 @@ type Group struct {
 
 // GroupMember mirrors group_members; Role is "lead" or "member".
 type GroupMember struct {
-	ID      string `json:"id"`
-	GroupID string `json:"groupId"`
-	UserID  string `json:"userId"`
-	Role    string `json:"role"`
+	ID       string `json:"id"`
+	GroupID  string `json:"groupId"`
+	CourseID string `json:"courseId"`
+	UserID   string `json:"userId"`
+	Role     string `json:"role"`
 }
 
 // Message mirrors the messages table.
@@ -99,15 +100,6 @@ type Task struct {
 	UpdatedAt   time.Time  `json:"updatedAt"`
 
 	AssigneeName string `json:"assigneeName,omitempty"`
-}
-
-// AISummary mirrors the ai_summaries table.
-type AISummary struct {
-	ID            string    `json:"id"`
-	GroupID       string    `json:"groupId"`
-	FromMessageID *string   `json:"fromMessageId,omitempty"`
-	Summary       string    `json:"summary"`
-	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // Task status constants.

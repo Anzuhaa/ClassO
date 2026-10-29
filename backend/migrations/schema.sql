@@ -9,18 +9,16 @@
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------------
--- PROFILES — mirrors Supabase Auth users so we can attach domain data
--- (skills, name). The id is the Supabase Auth user id for real signups, but it
--- is NOT FK-constrained to auth.users so that local development with
--- ALLOW_NO_AUTH=true (synthetic demo user ids) also works. The
--- handle_new_user() trigger below keeps real signups in sync.
+-- PROFILES — mirrors Supabase Auth users so we can attach domain data.
+-- The id is the Supabase Auth user id (NOT FK-constrained to auth.users so
+-- local development with ALLOW_NO_AUTH=true also works). The handle_new_user()
+-- trigger below keeps real signups in sync.
 -- ---------------------------------------------------------------------------
 create table if not exists public.profiles (
   id         uuid primary key,
   full_name  text not null default '',
   email      text not null unique,
   avatar_url text,
-  skills     text[] not null default '{}',
   role       text not null default 'student' check (role in ('instructor','student')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -45,23 +43,19 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- ---------------------------------------------------------------------------
 -- COURSES — a course ("matkul") defines the grouping contract.
--- ---------------------------------------------------------------------------
 create table if not exists public.courses (
   id         uuid primary key default gen_random_uuid(),
   name       text not null,
   code       text,
   join_code  text not null unique,
+  join_code_expires_at timestamptz,
   owner_id   uuid not null references public.profiles(id) on delete cascade,
-  group_size int  not null check (group_size > 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
--- ---------------------------------------------------------------------------
 -- COURSE_MEMBERS — enrollment with role (instructor | student).
--- ---------------------------------------------------------------------------
 create table if not exists public.course_members (
   id         uuid primary key default gen_random_uuid(),
   course_id  uuid not null references public.courses(id) on delete cascade,
@@ -71,32 +65,33 @@ create table if not exists public.course_members (
   unique (course_id, user_id)
 );
 
--- ---------------------------------------------------------------------------
--- GROUPS — a group belongs to exactly one course.
--- ---------------------------------------------------------------------------
+-- GROUPS — a group belongs to exactly one course and has a per-group capacity.
 create table if not exists public.groups (
   id         uuid primary key default gen_random_uuid(),
   course_id  uuid not null references public.courses(id) on delete cascade,
   name       text not null,
+  capacity   int not null default 4 check (capacity > 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 -- ---------------------------------------------------------------------------
--- GROUP_MEMBERS — membership with role (lead | member).
+-- GROUP_MEMBERS — membership with role (lead | member). The denormalized
+-- course_id (always equal to the parent group's course) lets us enforce the
+-- "one group per course per user" rule with a simple UNIQUE constraint.
 -- ---------------------------------------------------------------------------
 create table if not exists public.group_members (
   id         uuid primary key default gen_random_uuid(),
   group_id   uuid not null references public.groups(id) on delete cascade,
+  course_id  uuid not null references public.courses(id) on delete cascade,
   user_id    uuid not null references public.profiles(id) on delete cascade,
   role       text not null default 'member' check (role in ('lead','member')),
   created_at timestamptz not null default now(),
-  unique (group_id, user_id)
+  unique (group_id, user_id),
+  unique (course_id, user_id)
 );
 
--- ---------------------------------------------------------------------------
 -- MESSAGES — group chat discussion room.
--- ---------------------------------------------------------------------------
 create table if not exists public.messages (
   id         uuid primary key default gen_random_uuid(),
   group_id   uuid not null references public.groups(id) on delete cascade,
@@ -105,13 +100,10 @@ create table if not exists public.messages (
   created_at timestamptz not null default now()
 );
 
--- Rapid chat-scroll queries.
 create index if not exists idx_messages_group_created
   on public.messages (group_id, created_at desc);
 
--- ---------------------------------------------------------------------------
 -- FILES — file vault repository per group (bytes live in Supabase Storage).
--- ---------------------------------------------------------------------------
 create table if not exists public.files (
   id           uuid primary key default gen_random_uuid(),
   group_id     uuid not null references public.groups(id) on delete cascade,
@@ -126,9 +118,7 @@ create table if not exists public.files (
 create index if not exists idx_files_group_created
   on public.files (group_id, created_at desc);
 
--- ---------------------------------------------------------------------------
 -- TASKS — kanban task board with status and assignee.
--- ---------------------------------------------------------------------------
 create table if not exists public.tasks (
   id          uuid primary key default gen_random_uuid(),
   group_id    uuid not null references public.groups(id) on delete cascade,
@@ -145,20 +135,7 @@ create table if not exists public.tasks (
 create index if not exists idx_tasks_group_status
   on public.tasks (group_id, status);
 
--- ---------------------------------------------------------------------------
--- AI_SUMMARIES — snapshots of AI-generated chat summaries.
--- ---------------------------------------------------------------------------
-create table if not exists public.ai_summaries (
-  id              uuid primary key default gen_random_uuid(),
-  group_id        uuid not null references public.groups(id) on delete cascade,
-  from_message_id uuid references public.messages(id) on delete set null,
-  summary         text not null,
-  created_at      timestamptz not null default now()
-);
-
--- ---------------------------------------------------------------------------
 -- Trigger to refresh updated_at automatically.
--- ---------------------------------------------------------------------------
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
@@ -189,11 +166,7 @@ create trigger trg_tasks_updated
   before update on public.tasks
   for each row execute function public.set_updated_at();
 
--- ============================================================================
 -- ROW-LEVEL SECURITY (RLS)
--- The database enforces that users can only see/act on data in their own
--- courses and groups, regardless of what the client requests.
--- ============================================================================
 
 -- Helper: is the current user a member of the given group?
 create or replace function public.is_group_member(gid uuid)
@@ -231,7 +204,29 @@ alter table public.group_members  enable row level security;
 alter table public.messages       enable row level security;
 alter table public.files          enable row level security;
 alter table public.tasks          enable row level security;
-alter table public.ai_summaries   enable row level security;
+
+-- Make the policy section re-runnable: CREATE POLICY has no IF NOT EXISTS, so
+-- drop each policy first. This keeps `go run ./cmd/migrate` idempotent.
+drop policy if exists "profiles_select_own" on public.profiles;
+drop policy if exists "profiles_select_course_peers" on public.profiles;
+drop policy if exists "profiles_update_own" on public.profiles;
+drop policy if exists "courses_select_member" on public.courses;
+drop policy if exists "courses_insert_owner" on public.courses;
+drop policy if exists "courses_update_owner" on public.courses;
+drop policy if exists "courses_delete_owner" on public.courses;
+drop policy if exists "cm_select_member" on public.course_members;
+drop policy if exists "cm_insert_owner" on public.course_members;
+drop policy if exists "groups_select_member" on public.groups;
+drop policy if exists "groups_insert_owner" on public.groups;
+drop policy if exists "gm_select_member" on public.group_members;
+drop policy if exists "messages_select_member" on public.messages;
+drop policy if exists "messages_insert_member" on public.messages;
+drop policy if exists "files_select_member" on public.files;
+drop policy if exists "files_insert_member" on public.files;
+drop policy if exists "tasks_select_member" on public.tasks;
+drop policy if exists "tasks_insert_member" on public.tasks;
+drop policy if exists "tasks_update_member" on public.tasks;
+drop policy if exists "tasks_delete_lead" on public.tasks;
 
 -- ---- PROFILES -----------------------------------------------------------
 create policy "profiles_select_own" on public.profiles
@@ -321,13 +316,5 @@ create policy "tasks_delete_lead" on public.tasks
     )
   );
 
--- ---- AI_SUMMARIES -------------------------------------------------------
-create policy "summaries_select_member" on public.ai_summaries
-  for select using (public.is_group_member(group_id));
-create policy "summaries_insert_member" on public.ai_summaries
-  for insert with check (public.is_group_member(group_id));
-
--- ============================================================================
 -- Realtime: enable so the chat room receives live message inserts.
--- ============================================================================
 alter publication supabase_realtime add table public.messages;

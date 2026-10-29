@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -33,9 +34,11 @@ func (h *CourseHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // Get returns a single course by id, including its join code so instructors can
-// share it from the course header.
+// share it from the course header. Only the owner or an enrolled member may read
+// it (403 otherwise).
 func (h *CourseHandler) Get(w http.ResponseWriter, r *http.Request) {
 	courseID := r.PathValue("id")
+	userID := middleware.UserID(r.Context())
 	course, err := h.repo.GetCourse(r.Context(), courseID)
 	if err != nil {
 		if err == repository.ErrNotFound {
@@ -45,14 +48,23 @@ func (h *CourseHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load course")
 		return
 	}
+
+	member, err := h.repo.IsCourseMember(r.Context(), courseID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check access")
+		return
+	}
+	if !member {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
 	writeJSON(w, http.StatusOK, course)
 }
 
 // createCourseRequest is the payload for creating a course.
 type createCourseRequest struct {
-	Name      string `json:"name"`
-	Code      string `json:"code"`
-	GroupSize int    `json:"groupSize"`
+	Name string `json:"name"`
+	Code string `json:"code"`
 }
 
 // Create inserts a new course owned by the current user and enrolls them as
@@ -63,28 +75,36 @@ func (h *CourseHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == "" {
+	if strings.TrimSpace(req.Name) == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if req.GroupSize <= 0 {
-		writeError(w, http.StatusBadRequest, "groupSize must be positive")
+
+	// Only instructors may create courses.
+	profile, err := h.repo.GetProfile(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load profile")
+		return
+	}
+	if profile.Role != models.RoleInstructor {
+		writeError(w, http.StatusForbidden, "only instructors can create courses")
 		return
 	}
 
 	course, err := h.repo.CreateCourse(r.Context(), models.Course{
-		Name:      req.Name,
-		Code:      req.Code,
-		OwnerID:   userID,
-		GroupSize: req.GroupSize,
+		Name:    strings.TrimSpace(req.Name),
+		Code:    strings.TrimSpace(req.Code),
+		OwnerID: userID,
 	})
 	if err != nil {
+		log.Printf("create course: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to create course")
 		return
 	}
 
 	// The owner is also an instructor member.
 	if err := h.repo.AddCourseMember(r.Context(), course.ID, userID, models.RoleInstructor); err != nil {
+		log.Printf("enroll instructor: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to enroll instructor")
 		return
 	}
@@ -92,31 +112,66 @@ func (h *CourseHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, course)
 }
 
-// Form instructs the FormationService to split the course's roster and
-// persist groups. Only meaningful for an instructor (owned course).
-func (h *CourseHandler) Form(w http.ResponseWriter, r *http.Request) {
+// Delete removes a course owned by the current user, cascading to all groups,
+// members, and workspace content (messages/files/tasks).
+func (h *CourseHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	courseID := r.PathValue("id")
-	course, err := h.repo.GetCourse(r.Context(), courseID)
-	if err != nil {
+	userID := middleware.UserID(r.Context())
+	if err := h.repo.DeleteCourse(r.Context(), courseID, userID); err != nil {
 		if err == repository.ErrNotFound {
-			writeError(w, http.StatusNotFound, "course not found")
+			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load course")
+		writeError(w, http.StatusInternalServerError, "failed to delete course")
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
 
-	result, err := h.formation.FormGroups(r.Context(), course)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+// RegenerateJoinCode issues a fresh join code for an owned course.
+func (h *CourseHandler) RegenerateJoinCode(w http.ResponseWriter, r *http.Request) {
+	courseID := r.PathValue("id")
+	if !h.requireInstructor(w, r, courseID) {
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	userID := middleware.UserID(r.Context())
+	course, err := h.repo.RegenerateJoinCode(r.Context(), courseID, userID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "course not found or not owned")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to regenerate join code")
+		return
+	}
+	writeJSON(w, http.StatusOK, course)
+}
+
+// ExpireJoinCode revokes a course's join code so new joins are rejected.
+func (h *CourseHandler) ExpireJoinCode(w http.ResponseWriter, r *http.Request) {
+	courseID := r.PathValue("id")
+	if !h.requireInstructor(w, r, courseID) {
+		return
+	}
+	userID := middleware.UserID(r.Context())
+	course, err := h.repo.ExpireJoinCode(r.Context(), courseID, userID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "course not found or not owned")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to expire join code")
+		return
+	}
+	writeJSON(w, http.StatusOK, course)
 }
 
 // ListGroups returns all groups in a course.
 func (h *CourseHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	courseID := r.PathValue("id")
+	if !h.requireMember(w, r, courseID) {
+		return
+	}
 	groups, err := h.repo.ListGroups(r.Context(), courseID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list groups")
@@ -132,8 +187,12 @@ type addMemberRequest struct {
 }
 
 // AddMember enrolls a user into a course; used for joining by code or invite.
+// Instructor-only.
 func (h *CourseHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	courseID := r.PathValue("id")
+	if !h.requireInstructor(w, r, courseID) {
+		return
+	}
 	var req addMemberRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -153,14 +212,34 @@ func (h *CourseHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// RemoveMember removes a user's enrollment from a course (instructor action).
+func (h *CourseHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	courseID := r.PathValue("id")
+	if !h.requireInstructor(w, r, courseID) {
+		return
+	}
+	var req addMemberRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.UserID == "" {
+		writeError(w, http.StatusBadRequest, "userId is required")
+		return
+	}
+	if err := h.repo.RemoveCourseMember(r.Context(), courseID, req.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove member")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // joinCourseRequest is the payload for joining a course by its join code.
 type joinCourseRequest struct {
 	JoinCode string `json:"joinCode"`
 }
 
 // JoinByCode enrolls the current user into the course matching the given join
-// code as a student. Idempotent: joining an already-joined course is a no-op
-// success.
+// code as a student. Idempotent: joining an already-joined course is a no-op.
 func (h *CourseHandler) JoinByCode(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserID(r.Context())
 	var req joinCourseRequest
@@ -176,24 +255,33 @@ func (h *CourseHandler) JoinByCode(w http.ResponseWriter, r *http.Request) {
 	course, err := h.repo.GetCourseByJoinCode(r.Context(), code)
 	if err != nil {
 		if err == repository.ErrNotFound {
-			writeError(w, http.StatusNotFound, "invalid join code")
+			writeError(w, http.StatusNotFound, "invalid or expired join code")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to look up course")
 		return
 	}
 
-	if err := h.repo.AddCourseMember(r.Context(), course.ID, userID, models.RoleStudent); err != nil {
+	// Enroll with the user's global profile role (instructor accounts join as
+	// instructors; students as students), not always as student.
+	role := models.RoleStudent
+	if profile, err := h.repo.GetProfile(r.Context(), userID); err == nil && profile.Role == models.RoleInstructor {
+		role = models.RoleInstructor
+	}
+
+	if err := h.repo.AddCourseMember(r.Context(), course.ID, userID, role); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to join course")
 		return
 	}
 	writeJSON(w, http.StatusOK, course)
 }
 
-// Members returns the enrollment roster (profiles + per-course role) for a
-// course, so instructors and students can see who is enrolled and their tags.
+// Members returns the enrollment roster for a course. Member-only.
 func (h *CourseHandler) Members(w http.ResponseWriter, r *http.Request) {
 	courseID := r.PathValue("id")
+	if !h.requireMember(w, r, courseID) {
+		return
+	}
 	members, err := h.repo.ListCourseMembers(r.Context(), courseID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list members")
@@ -203,10 +291,12 @@ func (h *CourseHandler) Members(w http.ResponseWriter, r *http.Request) {
 }
 
 // MyGroup returns the group id the current user already belongs to within this
-// course (or an empty string when they are in none). The frontend uses this to
-// render the "Joined" state and disable join buttons across groups.
+// course (or an empty string when they are in none).
 func (h *CourseHandler) MyGroup(w http.ResponseWriter, r *http.Request) {
 	courseID := r.PathValue("id")
+	if !h.requireMember(w, r, courseID) {
+		return
+	}
 	userID := middleware.UserID(r.Context())
 	groupID, err := h.repo.GroupInCourseForUser(r.Context(), courseID, userID)
 	if err != nil {
@@ -216,10 +306,19 @@ func (h *CourseHandler) MyGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"groupId": groupID})
 }
 
-// RandomAssign splits the course roster into groups using a fast deterministic
-// shuffle, bypassing the AI. It is the instructor's "Random Assign" action.
+// randomAssignRequest carries the target group capacity for random assignment.
+type randomAssignRequest struct {
+	Capacity int `json:"capacity"`
+}
+
+// RandomAssign splits the course roster into groups using a deterministic
+// shuffle, respecting the given (or default) capacity and the one-group-per-
+// course rule. It is the instructor's "Random Assign" action.
 func (h *CourseHandler) RandomAssign(w http.ResponseWriter, r *http.Request) {
 	courseID := r.PathValue("id")
+	if !h.requireInstructor(w, r, courseID) {
+		return
+	}
 	course, err := h.repo.GetCourse(r.Context(), courseID)
 	if err != nil {
 		if err == repository.ErrNotFound {
@@ -230,10 +329,48 @@ func (h *CourseHandler) RandomAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.formation.RandomAssign(r.Context(), course)
+	var req randomAssignRequest
+	_ = decodeJSON(w, r, &req) // body is optional; capacity defaults below
+	capacity := req.Capacity
+	if capacity <= 0 {
+		capacity = 4
+	}
+
+	result, err := h.formation.RandomAssign(r.Context(), course, capacity)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+// requireMember enforces course membership (owner or enrolled) and writes a 403
+// when the user has no access. Returns true when access is granted.
+func (h *CourseHandler) requireMember(w http.ResponseWriter, r *http.Request, courseID string) bool {
+	userID := middleware.UserID(r.Context())
+	ok, err := h.repo.IsCourseMember(r.Context(), courseID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check access")
+		return false
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
+
+// requireInstructor enforces course instructor authority (owner or courseRole
+// instructor) and writes a 403 otherwise.
+func (h *CourseHandler) requireInstructor(w http.ResponseWriter, r *http.Request, courseID string) bool {
+	userID := middleware.UserID(r.Context())
+	ok, err := h.repo.IsCourseInstructor(r.Context(), courseID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check access")
+		return false
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
 }
