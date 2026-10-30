@@ -60,6 +60,30 @@ export const api = {
   updateMe: (body: { fullName?: string; role?: 'instructor' | 'student' }) =>
     request<Profile>('/profiles/me', { method: 'PATCH', body: JSON.stringify(body) }),
   promoteMe: () => request<Profile>('/profiles/me/promote', { method: 'POST' }),
+  // Multipart avatar upload (not JSON, so it bypasses the JSON request helper).
+  uploadAvatar: async (file: File): Promise<Profile> => {
+    const form = new FormData()
+    form.append('file', file)
+    const token = getAccessToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    const res = await fetch(`${BASE}/profiles/me/avatar`, {
+      method: 'POST',
+      headers,
+      body: form,
+    })
+    if (!res.ok) {
+      let message = `Avatar upload failed (${res.status})`
+      try {
+        const body = await res.json()
+        if (body?.error) message = body.error
+      } catch {
+        /* ignore non-JSON */
+      }
+      throw new ApiError(res.status, message)
+    }
+    return res.json()
+  },
 
   // Courses
   listCourses: () => request<Course[]>('/courses'),
@@ -148,7 +172,16 @@ export const api = {
       headers,
       body: form,
     })
-    if (!res.ok) throw new ApiError(res.status, `Upload failed (${res.status})`)
+    if (!res.ok) {
+      let message = `Upload failed (${res.status})`
+      try {
+        const body = await res.json()
+        if (body?.error) message = body.error
+      } catch {
+        /* ignore non-JSON */
+      }
+      throw new ApiError(res.status, message)
+    }
     return res.json()
   },
 }

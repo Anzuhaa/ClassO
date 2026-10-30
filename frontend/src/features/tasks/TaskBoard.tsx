@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { api } from '../../lib/api'
+import { getStoredUser } from '../../lib/auth'
 import type { Profile, Task, TaskStatus } from '../../types'
 import { GlassCard, Button, Input, TextArea, Label, Spinner } from '../../components/ui'
 
@@ -16,6 +17,8 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+
+  const currentUserId = getStoredUser()?.id ?? ''
 
   // New task form.
   const [title, setTitle] = useState('')
@@ -149,7 +152,7 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
                 {columnTasks.length === 0 ? (
                   <p className="px-1 py-4 text-center text-xs text-[var(--text-tertiary)]">Empty</p>
                 ) : (
-                  columnTasks.map((task) => <TaskCard key={task.id} task={task} onMove={move} />)
+                  columnTasks.map((task) => <TaskCard key={task.id} task={task} currentUserId={currentUserId} onMove={move} />)
                 )}
               </div>
             </GlassCard>
@@ -161,9 +164,19 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
 }
 
 /** TaskCard renders one task with controls to move it between columns. */
-function TaskCard({ task, onMove }: { task: Task; onMove: (task: Task, status: TaskStatus) => void }) {
+function TaskCard({
+  task,
+  currentUserId,
+  onMove,
+}: {
+  task: Task
+  currentUserId: string
+  onMove: (task: Task, status: TaskStatus) => void
+}) {
   const canMoveBack = task.status !== 'todo'
   const canMoveFwd = task.status !== 'done'
+  // Highlight tasks assigned to "you" with a stronger accent border.
+  const isMine = !!task.assigneeId && task.assigneeId === currentUserId
   return (
     <div className="glass-strong rounded-xl p-3">
       <p className="text-sm font-medium">{task.title}</p>
@@ -171,7 +184,16 @@ function TaskCard({ task, onMove }: { task: Task; onMove: (task: Task, status: T
         <p className="mt-1 text-xs text-[var(--text-secondary)] line-clamp-2">{task.description}</p>
       )}
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-xs text-[var(--text-tertiary)]">{task.assigneeName || 'Unassigned'}</span>
+        <span
+          className={`inline-flex max-w-[60%] items-center truncate rounded-full border px-2 py-0.5 text-xs font-medium ${
+            isMine
+              ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+              : 'border-blue-500/40 text-[var(--text-secondary)]'
+          }`}
+          title={task.assigneeName || 'Unassigned'}
+        >
+          {task.assigneeName || 'Unassigned'}
+        </span>
         <div className="flex gap-1">
           {canMoveBack && (
             <button className="btn-ghost px-2 py-1 text-xs" onClick={() => onMove(task, back(task.status))}>

@@ -82,6 +82,26 @@ func (r *Repo) CreateGroupWithMembers(ctx context.Context, g models.Group, membe
 	return created, nil
 }
 
+// ResetCourseGroups atomically removes every group membership and group within
+// a course so a fresh random assignment can redistribute the roster without
+// tripping the one-group-per-course unique constraint. Deleting the groups also
+// cascades to their messages, tasks, and files via FK ON DELETE CASCADE.
+func (r *Repo) ResetCourseGroups(ctx context.Context, courseID string) error {
+	return r.tx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM group_members WHERE course_id = $1
+		`, courseID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM groups WHERE course_id = $1
+		`, courseID); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 // ListGroups returns all groups in a course with their membership counts,
 // ordered by creation time so the dashboard renders a stable list.
 func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group, error) {

@@ -32,21 +32,26 @@ type FormationResult struct {
 	Groups   []models.Group `json:"groups"`
 }
 
-// RandomAssign splits all enrolled students into evenly-sized groups using a
-// Fisher-Yates shuffle and persists them in a single transaction. Every student
-// is placed in exactly one group (no duplicates), and no group exceeds its
-// capacity. Returns the created groups.
+// RandomAssign splits only the enrolled students (never instructors) into
+// evenly-sized groups using a Fisher-Yates shuffle, resetting any existing
+// distribution first, and persists the result. Returns the created groups.
 func (s *FormationService) RandomAssign(ctx context.Context, course *models.Course, capacity int) (*FormationResult, error) {
 	if capacity <= 0 {
 		return nil, fmt.Errorf("capacity must be positive")
 	}
 
-	students, err := s.repo.ListProfilesByCourse(ctx, course.ID)
+	students, err := s.repo.ListStudentsByCourse(ctx, course.ID)
 	if err != nil {
 		return nil, fmt.Errorf("list students: %w", err)
 	}
 	if len(students) == 0 {
 		return nil, fmt.Errorf("no students enrolled in this course to group")
+	}
+
+	// Clear any prior distribution so re-running "random assign" is safe and the
+	// one-group-per-course unique constraint cannot be tripped by a stale row.
+	if err := s.repo.ResetCourseGroups(ctx, course.ID); err != nil {
+		return nil, fmt.Errorf("reset existing groups: %w", err)
 	}
 
 	ids := make([]string, 0, len(students))

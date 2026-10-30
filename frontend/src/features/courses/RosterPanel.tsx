@@ -1,7 +1,7 @@
 // RosterPanel: the course member roster with instructor "remove member" action.
 import { UserPlus, UserMinus } from 'lucide-react'
 import type { CourseMember } from '../../types'
-import { GlassCard } from '../../components/ui'
+import { GlassCard, Avatar } from '../../components/ui'
 
 export function RosterPanel({
   members,
@@ -29,9 +29,7 @@ export function RosterPanel({
         <ul className="space-y-2">
           {members.map((m) => (
             <li key={m.id} className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/10 text-xs font-semibold text-[var(--accent)]">
-                {initials(m.fullName)}
-              </span>
+              <Avatar name={m.fullName || m.email} src={m.avatarUrl} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">
                   {m.fullName || m.email}
@@ -54,16 +52,4 @@ export function RosterPanel({
       )}
     </GlassCard>
   )
-}
-
-/** initials returns up to two uppercase initials for a display name. */
-function initials(name: string): string {
-  if (!name) return '?'
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
 }

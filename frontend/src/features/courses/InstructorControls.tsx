@@ -1,9 +1,15 @@
-// InstructorControls: the join-code card (copy/regen/expire), random-assign
-// toolbar, and the manual group-creation form shown to course instructors.
+// InstructorControls: the join-code card (copy/regen/expire) with an activity
+// status badge, random-assign toolbar, and the manual group-creation form.
 import { useState } from 'react'
 import { Copy, Check, RefreshCw, CircleSlash, Shuffle, Plus } from 'lucide-react'
 import type { Course } from '../../types'
 import { GlassCard, Button, Input, Label, Spinner } from '../../components/ui'
+
+/** joinCodeActive reports whether a course's join code is still usable. */
+export function joinCodeActive(course: Course): boolean {
+  if (!course.joinCodeExpiresAt) return true
+  return new Date(course.joinCodeExpiresAt).getTime() > Date.now()
+}
 
 export function InstructorControls({
   course,
@@ -54,6 +60,16 @@ export function InstructorControls({
         </span>
         <span className="rounded-lg bg-[var(--surface)] px-3 py-1 font-mono text-lg font-bold tracking-widest text-[var(--accent)]">
           {course.joinCode}
+        </span>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+            joinCodeActive(course)
+              ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+              : 'bg-red-500/15 text-red-600 dark:text-red-400'
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${joinCodeActive(course) ? 'bg-green-500' : 'bg-red-500'}`} />
+          {joinCodeActive(course) ? 'Active' : 'Expired'}
         </span>
         <Button variant="ghost" onClick={copyCode} className="px-2" aria-label="Copy join code">
           {copied ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}

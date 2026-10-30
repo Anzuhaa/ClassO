@@ -47,6 +47,7 @@ export interface Message {
   content: string
   createdAt: string
   senderName?: string
+  senderAvatarUrl?: string
 }
 
 export interface VaultFile {

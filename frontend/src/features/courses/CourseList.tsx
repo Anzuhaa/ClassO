@@ -2,7 +2,7 @@
 // and per-course delete (with confirmation).
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Users, LogIn, X, ClipboardPaste, Trash2 } from 'lucide-react'
+import { Plus, Users, LogIn, X, ClipboardPaste, Trash2, LayoutGrid } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
 import { getStoredUser } from '../../lib/auth'
 import type { Course } from '../../types'
@@ -246,16 +246,30 @@ export function CourseList({ onCreated, isInstructor }: { onCreated: () => void;
                 </div>
               </GlassCard>
               {c.ownerId === userId && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setDeleteTarget(c)
-                  }}
-                  className="absolute right-2 top-2 rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-red-500"
-                  aria-label={`Delete ${c.name}`}
-                >
-                  <Trash2 size={16} />
-                </button>
+                <div className="absolute right-2 top-2 flex gap-1.5">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/courses/${c.id}`)
+                    }}
+                    className="rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+                    aria-label={`View groups & members for ${c.name}`}
+                    title="View groups & members"
+                  >
+                    <LayoutGrid size={16} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDeleteTarget(c)
+                    }}
+                    className="rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-red-500"
+                    aria-label={`Delete ${c.name}`}
+                    title="Delete course"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               )}
             </div>
           ))}

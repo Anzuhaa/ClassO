@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckSquare, MessageSquare, FolderOpen } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { Profile } from '../../types'
-import { GlassCard } from '../../components/ui'
+import { GlassCard, Avatar } from '../../components/ui'
 import { TaskBoard } from '../tasks/TaskBoard'
 import { ChatRoom } from '../chat/ChatRoom'
 import { FileVault } from '../vault/FileVault'
@@ -76,9 +76,7 @@ export function GroupWorkspace() {
           <ul className="space-y-2">
             {members.map((m) => (
               <li key={m.id} className="flex items-center gap-2.5">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/10 text-xs font-semibold text-[var(--accent)]">
-                  {initials(m.fullName)}
-                </span>
+                <Avatar name={m.fullName || m.email} src={m.avatarUrl} />
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{m.fullName || m.email}</p>
                   <p className="truncate text-xs text-[var(--text-tertiary)]">{m.role}</p>
@@ -90,16 +88,4 @@ export function GroupWorkspace() {
       </div>
     </div>
   )
-}
-
-/** initials returns up to two uppercase initials for a display name. */
-function initials(name: string): string {
-  if (!name) return '?'
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
 }

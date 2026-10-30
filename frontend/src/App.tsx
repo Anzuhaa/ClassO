@@ -20,9 +20,9 @@ export default function App() {
     return token ? stored : null
   })
 
-  // On mount, refresh the role from the backend's authoritative profile (which
-  // syncs from Supabase Auth metadata) so an admin's role change takes effect
-  // on the user's next load without a full re-login.
+  // On mount, refresh the role and avatar from the backend's authoritative
+  // profile (which syncs from Supabase Auth metadata) so an admin's role change
+  // and any avatar upload take effect on the user's next load without re-login.
   const refreshRole = () => {
     if (!user?.id) return
     api
@@ -30,8 +30,16 @@ export default function App() {
       .then((p) => {
         const role: AuthUser['role'] = p.role === 'instructor' ? 'instructor' : 'student'
         setUser((prev) => {
-          if (!prev || prev.role === role) return prev
-          const updated = { ...prev, role }
+          if (!prev) return prev
+          const updated: AuthUser = {
+            ...prev,
+            role,
+            avatarUrl: p.avatarUrl,
+            fullName: p.fullName || prev.fullName,
+          }
+          if (updated.role === prev.role && updated.avatarUrl === prev.avatarUrl && updated.fullName === prev.fullName) {
+            return prev
+          }
           persistUser(updated)
           return updated
         })
@@ -47,7 +55,12 @@ export default function App() {
   return (
     <BrowserRouter>
       {user ? (
-        <AuthenticatedApp user={user} onLogout={() => setUser(null)} onPromoted={refreshRole} />
+        <AuthenticatedApp
+          user={user}
+          onLogout={() => setUser(null)}
+          onPromoted={refreshRole}
+          onUserUpdated={setUser}
+        />
       ) : (
         <AuthScreen onAuthed={setUser} />
       )}
@@ -60,10 +73,12 @@ function AuthenticatedApp({
   user,
   onLogout,
   onPromoted,
+  onUserUpdated,
 }: {
   user: AuthUser
   onLogout: () => void
   onPromoted: () => void
+  onUserUpdated: (user: AuthUser) => void
 }) {
   const { theme, toggle } = useTheme()
   const navigate = useNavigate()
@@ -114,7 +129,7 @@ function AuthenticatedApp({
         </nav>
 
         <div className="mt-auto space-y-2">
-          <UserMenu user={user} onLogout={onLogout} onPromoted={onPromoted} />
+          <UserMenu user={user} onLogout={onLogout} onPromoted={onPromoted} onUserUpdated={onUserUpdated} />
           <button
             onClick={toggle}
             className="btn-ghost inline-flex w-full items-center justify-center gap-2 px-3 py-2 text-sm"

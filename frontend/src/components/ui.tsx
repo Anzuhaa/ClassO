@@ -1,5 +1,6 @@
 // Shared UI primitives built on the frosted-glass design system.
 
+import { useState } from 'react'
 import type {
   ButtonHTMLAttributes,
   HTMLAttributes,
@@ -70,4 +71,42 @@ export function Spinner({ className = '' }: { className?: string }) {
       aria-label="loading"
     />
   )
+}
+
+/** Avatar renders a profile picture with an initials fallback when the URL is
+ * missing or fails to load.
+ */
+export function Avatar({
+  name,
+  src,
+  size = 32,
+  className = '',
+}: {
+  name: string
+  src?: string
+  size?: number
+  className?: string
+}) {
+  const [broken, setBroken] = useState(false)
+  const showImg = src && !broken
+  return (
+    <span
+      className={`flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-[var(--accent)]/10 text-xs font-semibold text-[var(--accent)] ${className}`}
+      style={{ width: size, height: size, fontSize: Math.max(10, size * 0.36) }}
+      aria-hidden
+    >
+      {showImg ? (
+        <img src={src} alt="" className="h-full w-full object-cover" onError={() => setBroken(true)} />
+      ) : (
+        init(name)
+      )}
+    </span>
+  )
+}
+
+/** init returns up to two uppercase initials from a display name. */
+function init(name: string): string {
+  if (!name) return '?'
+  const parts = name.split(/\s+/).filter(Boolean)
+  return (parts.slice(0, 2).map((w) => w[0]).join('') || '?').toUpperCase()
 }

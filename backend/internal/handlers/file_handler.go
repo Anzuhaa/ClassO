@@ -3,9 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,7 +67,9 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	storagePath, err := h.storage.Upload(r.Context(), objectKey, data, header.Header.Get("Content-Type"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store file")
+		// Surface the underlying storage error (missing bucket, bad key, etc.) so
+		// the failure is diagnosable instead of a generic 500.
+		writeError(w, http.StatusBadGateway, "failed to store file: "+err.Error())
 		return
 	}
 
@@ -122,7 +122,9 @@ func (h *FileHandler) URL(w http.ResponseWriter, r *http.Request) {
 
 	signed, err := h.storage.CreateSignedURL(r.Context(), record.StoragePath, time.Hour)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to sign URL")
+		// Surface the underlying storage error (missing bucket, bad key, etc.)
+		// so the failure is diagnosable instead of a generic 500.
+		writeError(w, http.StatusBadGateway, "failed to sign URL: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"url": signed, "name": record.Name, "mimeType": record.MimeType})
@@ -160,10 +162,9 @@ func sanitizeName(name string) string {
 // URLs using the service-role key (server-side only; the key never leaves the
 // backend).
 type StorageClient struct {
-	baseURL     string
-	serviceKey  string
-	jwtSecret   string
-	http        *http.Client
+	baseURL    string
+	serviceKey string
+	http       *http.Client
 }
 
 // NewStorageClient builds a StorageClient from config.
@@ -171,7 +172,6 @@ func NewStorageClient(cfg *config.Config) *StorageClient {
 	return &StorageClient{
 		baseURL:    strings.TrimSuffix(cfg.SupabaseURL, "/"),
 		serviceKey: cfg.SupabaseServiceKey,
-		jwtSecret:  cfg.SupabaseJWTSecret,
 		http:       &http.Client{Timeout: 60 * time.Second},
 	}
 }
@@ -186,7 +186,7 @@ func (s *StorageClient) Upload(ctx context.Context, objectKey string, data []byt
 		return "", fmt.Errorf("storage not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY)")
 	}
 
-	u := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.baseURL, storageBucket, url.PathEscape(objectKey))
+	u := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.baseURL, storageBucket, escapeObjectPath(objectKey))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
 	if err != nil {
 		return "", err
@@ -213,42 +213,74 @@ func (s *StorageClient) Upload(ctx context.Context, objectKey string, data []byt
 	return storageBucket + "/" + objectKey, nil
 }
 
-// CreateSignedURL returns a short-lived signed URL for an object path. It
-// signs the URL with the service-role JWT using Supabase's documented signed-
-// URL scheme.
+// escapeObjectPath URL-encodes each path segment of an object key, preserving
+// "/" as the hierarchy separator. url.PathEscape would turn "/" into %2F,
+// collapsing "{groupID}/{name}" into a single flat object name.
+func escapeObjectPath(objectKey string) string {
+	segs := strings.Split(objectKey, "/")
+	for i, seg := range segs {
+		segs[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segs, "/")
+}
+
+// CreateSignedURL asks Supabase Storage to mint a signed URL for an object via
+// its server-side sign endpoint, authenticated with the service-role key. The
+// returned URL is short-lived and grants temporary access without exposing any
+// secret to the client.
 func (s *StorageClient) CreateSignedURL(ctx context.Context, path string, expires time.Duration) (string, error) {
-	if s.baseURL == "" || s.serviceKey == "" || s.jwtSecret == "" {
+	if s.baseURL == "" || s.serviceKey == "" {
 		return "", fmt.Errorf("storage not configured")
 	}
 
 	// path may already include the bucket prefix or be just the object key.
 	objectPath := strings.TrimPrefix(path, storageBucket+"/")
-	exp := time.Now().Add(expires).Unix()
 
-	token := signToken(s.jwtSecret, objectPath, exp)
-	q := url.Values{}
-	q.Set("token", token)
+	// The sign endpoint expects a JSON body with the desired expiry in seconds.
+	body, err := json.Marshal(map[string]any{"expiresIn": int(expires.Seconds())})
+	if err != nil {
+		return "", err
+	}
 
-	u := fmt.Sprintf("%s/storage/v1/object/sign/%s/%s", s.baseURL, storageBucket, objectPath)
-	return u + "?" + q.Encode(), nil
-}
+	u := fmt.Sprintf("%s/storage/v1/object/sign/%s/%s", s.baseURL, storageBucket, escapeObjectPath(objectPath))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
+	req.Header.Set("Content-Type", "application/json")
 
-// signToken builds the JWT that Supabase Storage expects for signed URLs. It
-// is an HS256 token with custom claims "url" (the object path) and "exp".
-func signToken(secret, objectPath string, exp int64) string {
-	header := base64URL([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := base64URL([]byte(fmt.Sprintf(`{"url":%q,"exp":%d}`, objectPath, exp)))
-	signingInput := header + "." + payload
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
 
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(signingInput))
-	sig := mac.Sum(nil)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("signed url request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
 
-	return signingInput + "." + base64URL(sig)
-}
-
-// base64URL encodes bytes in raw URL-safe base64 (no padding), matching the
-// encoding Supabase's signed JWT payloads use.
-func base64URL(data []byte) string {
-	return base64.RawURLEncoding.EncodeToString(data)
+	// Supabase returns the URL under "signedURL" (current API) or "signedUrl"
+	// (older); accept either so a casing change can't break downloads.
+	var out struct {
+		SignedURL string `json:"signedURL"`
+		SignedUrl string `json:"signedUrl"`
+	}
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return "", fmt.Errorf("signed url response unparsable: %s", strings.TrimSpace(string(respBody)))
+	}
+	signed := out.SignedURL
+	if signed == "" {
+		signed = out.SignedUrl
+	}
+	if signed == "" {
+		return "", fmt.Errorf("signed url response missing signedURL: %s", strings.TrimSpace(string(respBody)))
+	}
+	// Supabase returns a protocol-relative path (e.g. "/object/sign/..."); make it
+	// absolute so the browser can fetch it directly without the app's proxy.
+	if strings.HasPrefix(signed, "/") {
+		signed = s.baseURL + signed
+	}
+	return signed, nil
 }

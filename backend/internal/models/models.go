@@ -69,6 +69,10 @@ type Message struct {
 
 	// SenderName is a denormalized join field for display, not a column.
 	SenderName string `json:"senderName,omitempty"`
+
+	// SenderAvatarURL is the sender's profile picture URL (denormalized from
+	// profiles), empty when the sender has no avatar.
+	SenderAvatarURL string `json:"senderAvatarUrl,omitempty"`
 }
 
 // File mirrors the files (vault) table.

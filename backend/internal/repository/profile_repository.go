@@ -63,6 +63,25 @@ func (r *Repo) SetProfileEmail(ctx context.Context, id, email string) (*models.P
 	return &p, nil
 }
 
+// SetProfileAvatarURL updates only the avatar_url column for a profile,
+// returning the refreshed row. Used by the avatar upload endpoint.
+func (r *Repo) SetProfileAvatarURL(ctx context.Context, id, avatarURL string) (*models.Profile, error) {
+	row := r.Pool.QueryRow(ctx, `
+		UPDATE profiles SET avatar_url = $1, updated_at = now()
+		WHERE id = $2
+		RETURNING id, full_name, email, COALESCE(avatar_url, ''), COALESCE(role, 'student'), created_at
+	`, avatarURL, id)
+
+	var p models.Profile
+	if err := row.Scan(&p.ID, &p.FullName, &p.Email, &p.AvatarURL, &p.Role, &p.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &p, nil
+}
+
 // GetProfile fetches a single profile by id.
 func (r *Repo) GetProfile(ctx context.Context, id string) (*models.Profile, error) {
 	row := r.Pool.QueryRow(ctx, `
@@ -107,6 +126,33 @@ func (r *Repo) ListProfilesByCourse(ctx context.Context, courseID string) ([]mod
 		WHERE cm.course_id = $1
 		ORDER BY p.full_name
 	`, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.Profile, 0)
+	for rows.Next() {
+		var p models.Profile
+		if err := rows.Scan(&p.ID, &p.FullName, &p.Email, &p.AvatarURL, &p.Role, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ListStudentsByCourse returns only the student profiles enrolled in a course
+// (excluding instructors), used for random group assignment so instructors are
+// never placed into student groups.
+func (r *Repo) ListStudentsByCourse(ctx context.Context, courseID string) ([]models.Profile, error) {
+	rows, err := r.Pool.Query(ctx, `
+		SELECT p.id, p.full_name, p.email, COALESCE(p.avatar_url, ''), COALESCE(p.role, 'student'), p.created_at
+		FROM profiles p
+		JOIN course_members cm ON cm.user_id = p.id
+		WHERE cm.course_id = $1 AND cm.role = $2
+		ORDER BY p.full_name
+	`, courseID, models.RoleStudent)
 	if err != nil {
 		return nil, err
 	}

@@ -58,6 +58,7 @@ func main() {
 	mux.HandleFunc("GET /v1/profiles/me", profileHandler.Me)
 	mux.HandleFunc("PATCH /v1/profiles/me", profileHandler.Update)
 	mux.HandleFunc("POST /v1/profiles/me/promote", profileHandler.Promote)
+	mux.HandleFunc("POST /v1/profiles/me/avatar", profileHandler.UploadAvatar)
 
 	// Courses.
 	mux.HandleFunc("GET /v1/courses", courseHandler.List)

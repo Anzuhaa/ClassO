@@ -11,6 +11,7 @@ export interface AuthUser {
   email: string
   fullName?: string
   role: 'instructor' | 'student'
+  avatarUrl?: string
 }
 
 /** getAccessToken returns the persisted Supabase access token, or null. */
@@ -37,6 +38,7 @@ export function getStoredUser(): AuthUser | null {
       email: u.email,
       fullName: u.fullName,
       role: u.role === 'instructor' ? 'instructor' : 'student',
+      avatarUrl: u.avatarUrl,
     }
   } catch {
     return null

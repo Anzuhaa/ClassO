@@ -10,7 +10,7 @@ import type { Course, CourseMember, Group } from '../../types'
 import { GlassCard, Spinner } from '../../components/ui'
 import { GroupCard } from './GroupCard'
 import { RosterPanel } from './RosterPanel'
-import { InstructorControls } from './InstructorControls'
+import { InstructorControls, joinCodeActive } from './InstructorControls'
 
 export function CourseDetail() {
   const { courseId = '' } = useParams()
@@ -28,6 +28,15 @@ export function CourseDetail() {
   const [assignCapacity, setAssignCapacity] = useState(4)
 
   const userId = getStoredUser()?.id ?? ''
+
+  // Tick once a second while the page is open so a join code that expires (or is
+  // cleared) in the current session flips the badge from "Active" to "Expired"
+  // (and vice-versa after regeneration) without a manual reload.
+  const [, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -65,9 +74,14 @@ export function CourseDetail() {
       members.some((m) => m.id === userId && m.courseRole === 'instructor'))
 
   const runRandomAssign = async () => {
-    setAssigning(true)
     setError('')
     setMessage('')
+    // Confirm before resetting an existing distribution.
+    const willReset = groups.length > 0 || groups.some((g) => (g.memberCount ?? 0) > 0)
+    if (willReset && !window.confirm('Running random assignment will reset existing group memberships for this course. Do you want to proceed?')) {
+      return
+    }
+    setAssigning(true)
     try {
       const result = await api.randomAssign(courseId, assignCapacity)
       setMessage(`Randomly formed ${result.groups.length} groups.`)
@@ -175,6 +189,18 @@ export function CourseDetail() {
                 ? `${course.code ? course.code + ' · ' : ''}${groups.length} groups · ${members.length} members`
                 : 'Loading…'}
             </p>
+            {course && (
+              <span
+                className={`mt-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                  joinCodeActive(course)
+                    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+                    : 'bg-red-500/15 text-red-600 dark:text-red-400'
+                }`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${joinCodeActive(course) ? 'bg-green-500' : 'bg-red-500'}`} />
+                Join code {joinCodeActive(course) ? 'Active' : 'Expired'}
+              </span>
+            )}
           </div>
         </div>
 

@@ -25,7 +25,7 @@ func (r *Repo) CreateMessage(ctx context.Context, m models.Message) (*models.Mes
 // joined to the sender's name for direct display.
 func (r *Repo) ListMessages(ctx context.Context, groupID string, limit int) ([]models.Message, error) {
 	rows, err := r.Pool.Query(ctx, `
-		SELECT m.id, m.group_id, m.sender_id, m.content, m.created_at, p.full_name
+		SELECT m.id, m.group_id, m.sender_id, m.content, m.created_at, p.full_name, COALESCE(p.avatar_url, '')
 		FROM messages m
 		JOIN profiles p ON p.id = m.sender_id
 		WHERE m.group_id = $1
@@ -40,7 +40,7 @@ func (r *Repo) ListMessages(ctx context.Context, groupID string, limit int) ([]m
 	out := make([]models.Message, 0)
 	for rows.Next() {
 		var m models.Message
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.SenderID, &m.Content, &m.CreatedAt, &m.SenderName); err != nil {
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.SenderID, &m.Content, &m.CreatedAt, &m.SenderName, &m.SenderAvatarURL); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

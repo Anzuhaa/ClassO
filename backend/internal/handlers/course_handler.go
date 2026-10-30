@@ -255,7 +255,18 @@ func (h *CourseHandler) RandomAssign(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.formation.RandomAssign(r.Context(), course, capacity)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		// Sanitize: never leak raw internal errors. Map the two known benign
+		// cases to a clear message, everything else to a generic 500.
+		if strings.Contains(err.Error(), "no students") {
+			writeError(w, http.StatusUnprocessableEntity, "no students enrolled in this course to group")
+			return
+		}
+		if repository.IsUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "group assignment conflicted with an existing membership; please retry")
+			return
+		}
+		log.Printf("random assign: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to randomly assign groups")
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
