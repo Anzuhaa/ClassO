@@ -60,7 +60,7 @@ func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request)
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if sub, email, role := verifySupabaseJWT(cfg.SupabaseJWTSecret, token); sub != "" {
+		if sub, email, role := verifySupabaseJWT(cfg, token); sub != "" {
 			ensureProfile(cfg, repo, r, sub, email, role)
 			return sub
 		}
@@ -80,6 +80,7 @@ func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request)
 // jwtHeader is the decoded JWT header segment (unverified).
 type jwtHeader struct {
 	Alg string `json:"alg"`
+	Kid string `json:"kid"`
 }
 
 // jwtClaims is the decoded JWT payload segment. Role is read from Supabase's
@@ -109,30 +110,74 @@ func roleFromClaims(c *jwtClaims) string {
 	return ""
 }
 
-// verifySupabaseJWT validates the HS256 signature of a Supabase-issued JWT and
-// returns its "sub" (user id), email, and role claims, or ("", "", "") when
-// invalid.
+// verifySupabaseJWT validates a Supabase-issued JWT and returns its "sub" (user
+// id), email, and role claims, or ("", "", "") when invalid.
 //
-// The token is split into header.payload.signature; the signature is an HMAC-
-// SHA256 over "header.payload" keyed with the project's JWT secret. Expiry is
-// not enforced here (Supabase issues short-lived access tokens and refreshes
-// are handled client-side), but malformed or unverifiable tokens are rejected.
-func verifySupabaseJWT(secret, token string) (sub, email, role string) {
-	if secret == "" {
-		return "", "", ""
-	}
+// The verification algorithm is chosen from the token's "alg" header:
+//
+//   - ES256 (the current Supabase default): the signature is an ECDSA P-256
+//     signature over SHA-256("header.payload"). The public key is resolved from
+//     the project's JWKS endpoint (see jwks.go), keyed by the "kid" header.
+//   - HS256 (legacy): the signature is HMAC-SHA256 over "header.payload" keyed
+//     with the project's JWT secret (SUPABASE_JWT_SECRET).
+//
+// Expiry is not enforced here (Supabase issues short-lived access tokens and
+// refreshes are handled client-side), but malformed or unverifiable tokens are
+// rejected.
+func verifySupabaseJWT(cfg *config.Config, token string) (sub, email, role string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return "", "", ""
 	}
-
 	signingInput := parts[0] + "." + parts[1]
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(signingInput))
-	expected := mac.Sum(nil)
 
-	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || !hmac.Equal(sig, expected) {
+	headerPayload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", "", ""
+	}
+	var hdr jwtHeader
+	if err := json.Unmarshal(headerPayload, &hdr); err != nil {
+		return "", "", ""
+	}
+
+	var sigValid bool
+	switch hdr.Alg {
+	case "ES256":
+		if cfg.SupabaseURL == "" {
+			return "", "", ""
+		}
+		keys, err := resolveJWKS(cfg.SupabaseURL)
+		if err != nil {
+			return "", "", ""
+		}
+		pub, ok := keys[hdr.Kid]
+		if !ok {
+			return "", "", ""
+		}
+		sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil {
+			return "", "", ""
+		}
+		sigValid = verifyECDSA(pub, sha256Sum([]byte(signingInput)), sig)
+
+	case "HS256":
+		if cfg.SupabaseJWTSecret == "" {
+			return "", "", ""
+		}
+		mac := hmac.New(sha256.New, []byte(cfg.SupabaseJWTSecret))
+		mac.Write([]byte(signingInput))
+		expected := mac.Sum(nil)
+		sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil {
+			return "", "", ""
+		}
+		sigValid = hmac.Equal(sig, expected)
+
+	default:
+		return "", "", ""
+	}
+
+	if !sigValid {
 		return "", "", ""
 	}
 

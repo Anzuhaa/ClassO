@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -106,8 +105,6 @@ func (h *ProfileHandler) Promote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.emailAllowed(profile.Email) {
-		// Temporary diagnostic: show exactly what email is being checked.
-		fmt.Printf("[promote] userID=%s profileEmail=%q allowlist=%v\n", userID, profile.Email, h.cfg.InstructorEmails)
 		writeError(w, http.StatusForbidden, "email is not authorized for instructor access")
 		return
 	}
