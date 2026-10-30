@@ -59,6 +59,7 @@ export const api = {
   getMe: () => request<Profile>('/profiles/me'),
   updateMe: (body: { fullName?: string; role?: 'instructor' | 'student' }) =>
     request<Profile>('/profiles/me', { method: 'PATCH', body: JSON.stringify(body) }),
+  promoteMe: () => request<Profile>('/profiles/me/promote', { method: 'POST' }),
 
   // Courses
   listCourses: () => request<Course[]>('/courses'),

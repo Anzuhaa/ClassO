@@ -23,12 +23,12 @@ export default function App() {
   // On mount, refresh the role from the backend's authoritative profile (which
   // syncs from Supabase Auth metadata) so an admin's role change takes effect
   // on the user's next load without a full re-login.
-  useEffect(() => {
-    if (!user) return
+  const refreshRole = () => {
+    if (!user?.id) return
     api
       .getMe()
       .then((p) => {
-        const role = p.role === 'instructor' ? 'instructor' : 'student'
+        const role: AuthUser['role'] = p.role === 'instructor' ? 'instructor' : 'student'
         setUser((prev) => {
           if (!prev || prev.role === role) return prev
           const updated = { ...prev, role }
@@ -37,13 +37,17 @@ export default function App() {
         })
       })
       .catch(() => {})
+  }
+
+  useEffect(() => {
+    refreshRole()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id])
 
   return (
     <BrowserRouter>
       {user ? (
-        <AuthenticatedApp user={user} onLogout={() => setUser(null)} />
+        <AuthenticatedApp user={user} onLogout={() => setUser(null)} onPromoted={refreshRole} />
       ) : (
         <AuthScreen onAuthed={setUser} />
       )}
@@ -52,7 +56,15 @@ export default function App() {
 }
 
 /** AuthenticatedApp renders the sidebar + routed views for a signed-in user. */
-function AuthenticatedApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+function AuthenticatedApp({
+  user,
+  onLogout,
+  onPromoted,
+}: {
+  user: AuthUser
+  onLogout: () => void
+  onPromoted: () => void
+}) {
   const { theme, toggle } = useTheme()
   const navigate = useNavigate()
   const [courses, setCourses] = useState<Course[]>([])
@@ -102,7 +114,7 @@ function AuthenticatedApp({ user, onLogout }: { user: AuthUser; onLogout: () => 
         </nav>
 
         <div className="mt-auto space-y-2">
-          <UserMenu user={user} onLogout={onLogout} />
+          <UserMenu user={user} onLogout={onLogout} onPromoted={onPromoted} />
           <button
             onClick={toggle}
             className="btn-ghost inline-flex w-full items-center justify-center gap-2 px-3 py-2 text-sm"

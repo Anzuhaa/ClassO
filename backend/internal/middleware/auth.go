@@ -60,8 +60,8 @@ func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request)
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if sub, role := verifySupabaseJWT(cfg.SupabaseJWTSecret, token); sub != "" {
-			ensureProfile(repo, r, sub, role)
+		if sub, email, role := verifySupabaseJWT(cfg.SupabaseJWTSecret, token); sub != "" {
+			ensureProfile(cfg, repo, r, sub, email, role)
 			return sub
 		}
 	}
@@ -71,7 +71,7 @@ func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request)
 		if id == "" {
 			id = demoUserID
 		}
-		ensureProfile(repo, r, id, "")
+		ensureProfile(cfg, repo, r, id, "", "")
 		return id
 	}
 	return ""
@@ -84,10 +84,12 @@ type jwtHeader struct {
 
 // jwtClaims is the decoded JWT payload segment. Role is read from Supabase's
 // user_metadata (or app_metadata) so an admin-set role can be synced into the
-// profiles table on login.
+// profiles table on login; email is the user's canonical address (always
+// present in Supabase access tokens) and is used to keep profiles.email in sync.
 type jwtClaims struct {
-	Sub string `json:"sub"`
-	Exp int64  `json:"exp"`
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	Exp   int64  `json:"exp"`
 
 	UserMetadata map[string]any `json:"user_metadata"`
 	AppMetadata  map[string]any `json:"app_metadata"`
@@ -108,19 +110,20 @@ func roleFromClaims(c *jwtClaims) string {
 }
 
 // verifySupabaseJWT validates the HS256 signature of a Supabase-issued JWT and
-// returns its "sub" (user id) and role claims, or ("", "") when invalid.
+// returns its "sub" (user id), email, and role claims, or ("", "", "") when
+// invalid.
 //
 // The token is split into header.payload.signature; the signature is an HMAC-
 // SHA256 over "header.payload" keyed with the project's JWT secret. Expiry is
 // not enforced here (Supabase issues short-lived access tokens and refreshes
 // are handled client-side), but malformed or unverifiable tokens are rejected.
-func verifySupabaseJWT(secret, token string) (sub, role string) {
+func verifySupabaseJWT(secret, token string) (sub, email, role string) {
 	if secret == "" {
-		return "", ""
+		return "", "", ""
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return "", ""
+		return "", "", ""
 	}
 
 	signingInput := parts[0] + "." + parts[1]
@@ -130,30 +133,48 @@ func verifySupabaseJWT(secret, token string) (sub, role string) {
 
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || !hmac.Equal(sig, expected) {
-		return "", ""
+		return "", "", ""
 	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	var claims jwtClaims
 	if err := json.Unmarshal(payload, &claims); err != nil || claims.Sub == "" {
-		return "", ""
+		return "", "", ""
 	}
-	return claims.Sub, roleFromClaims(&claims)
+	return claims.Sub, claims.Email, roleFromClaims(&claims)
 }
 
 // ensureProfile lazily creates the profiles row for the identified user so
-// foreign keys resolve, and (when a valid role came from the JWT) syncs that
-// role into profiles.role. It preserves any existing profile; real email and
-// full_name are set by the auth handlers.
-func ensureProfile(repo *repository.Repo, r *http.Request, userID, role string) {
+// foreign keys resolve, and keeps profiles.role and profiles.email in sync with
+// the authoritative source. Role comes from the Supabase Auth Admin API (the
+// role an admin set on the Dashboard), falling back to JWT metadata and then
+// the seeded student default. Email comes from the JWT, falling back to the
+// Admin API, then a local placeholder. Keeping email accurate matters because
+// promotion (POST /profiles/me/promote) authorizes against the real address.
+func ensureProfile(cfg *config.Config, repo *repository.Repo, r *http.Request, userID, jwtEmail, jwtRole string) {
+	// Canonical role from Supabase Auth (admin-set). This is what an admin edits
+	// on the Dashboard after signup, and it wins over the JWT metadata, which
+	// does not carry user_metadata unless a custom claim is configured. The
+	// Admin API response also carries the canonical email as an email fallback.
+	adminRole, adminEmail := resolveFromAdmin(r.Context(), cfg, userID)
+	role := normalizeRole(adminRole, jwtRole)
+
+	email := strings.TrimSpace(jwtEmail)
+	if email == "" {
+		email = strings.TrimSpace(adminEmail)
+	}
+
 	existing, err := repo.GetProfile(r.Context(), userID)
 	if err == nil && existing != nil {
-		// Sync an admin-set role from the JWT into the profile when it differs.
 		if role != "" && role != existing.Role {
-			_ = repo.SetProfileRole(r.Context(), userID, role)
+			_, _ = repo.SetProfileRole(r.Context(), userID, role)
+		}
+		// Refresh a placeholder (or stale) email with the real address.
+		if email != "" && email != existing.Email {
+			_, _ = repo.SetProfileEmail(r.Context(), userID, email)
 		}
 		return
 	}
@@ -163,6 +184,9 @@ func ensureProfile(repo *repository.Repo, r *http.Request, userID, role string) 
 		FullName: "User",
 		Email:    userID + "@classo.local",
 		Role:     models.RoleStudent,
+	}
+	if email != "" {
+		p.Email = email
 	}
 	if role == models.RoleInstructor || role == models.RoleStudent {
 		p.Role = role

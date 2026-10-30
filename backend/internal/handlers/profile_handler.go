@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/classo/backend/internal/config"
 	"github.com/classo/backend/internal/middleware"
 	"github.com/classo/backend/internal/models"
 	"github.com/classo/backend/internal/repository"
@@ -14,11 +16,12 @@ import (
 // read and enrich the local profile mirror.
 type ProfileHandler struct {
 	repo *repository.Repo
+	cfg  *config.Config
 }
 
 // NewProfileHandler wires a ProfileHandler with its dependencies.
-func NewProfileHandler(repo *repository.Repo) *ProfileHandler {
-	return &ProfileHandler{repo: repo}
+func NewProfileHandler(repo *repository.Repo, cfg *config.Config) *ProfileHandler {
+	return &ProfileHandler{repo: repo, cfg: cfg}
 }
 
 // Me returns the profile identified by the current request's user id (from the
@@ -103,6 +106,8 @@ func (h *ProfileHandler) Promote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.emailAllowed(profile.Email) {
+		// Temporary diagnostic: show exactly what email is being checked.
+		fmt.Printf("[promote] userID=%s profileEmail=%q allowlist=%v\n", userID, profile.Email, h.cfg.InstructorEmails)
 		writeError(w, http.StatusForbidden, "email is not authorized for instructor access")
 		return
 	}

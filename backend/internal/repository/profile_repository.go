@@ -43,6 +43,26 @@ func (r *Repo) SetProfileRole(ctx context.Context, id, role string) (*models.Pro
 	return &p, nil
 }
 
+// SetProfileEmail updates only the email column for a profile, returning the
+// refreshed row. Used to backfill the placeholder address with the real Supabase
+// Auth email so allowlist checks (e.g. instructor promotion) match correctly.
+func (r *Repo) SetProfileEmail(ctx context.Context, id, email string) (*models.Profile, error) {
+	row := r.Pool.QueryRow(ctx, `
+		UPDATE profiles SET email = $1, updated_at = now()
+		WHERE id = $2
+		RETURNING id, full_name, email, COALESCE(avatar_url, ''), COALESCE(role, 'student'), created_at
+	`, email, id)
+
+	var p models.Profile
+	if err := row.Scan(&p.ID, &p.FullName, &p.Email, &p.AvatarURL, &p.Role, &p.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &p, nil
+}
+
 // GetProfile fetches a single profile by id.
 func (r *Repo) GetProfile(ctx context.Context, id string) (*models.Profile, error) {
 	row := r.Pool.QueryRow(ctx, `
