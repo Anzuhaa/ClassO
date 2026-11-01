@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -82,12 +83,15 @@ func (h *GroupHandler) Tasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tasks)
 }
 
-// createTaskRequest is the payload for creating a task.
+// createTaskRequest is the payload for creating a task. Assignees are a list of
+// group member ids (may be empty). assigneeId is accepted as a single-value
+// fallback for older clients.
 type createTaskRequest struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	AssigneeID  *string `json:"assigneeId"`
-	DueDate     *string `json:"dueDate"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	AssigneeID   *string  `json:"assigneeId"`
+	AssigneeIDs  []string `json:"assigneeIds"`
+	DueDate      *string  `json:"dueDate"`
 }
 
 // CreateTask inserts a new task in the group's board.
@@ -116,16 +120,31 @@ func (h *GroupHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		due = &t
 	}
 
+	// Normalize assignee ids: prefer the list, else fall back to the single id.
+	assigneeIDs := req.AssigneeIDs
+	if len(assigneeIDs) == 0 && req.AssigneeID != nil && *req.AssigneeID != "" {
+		assigneeIDs = []string{*req.AssigneeID}
+	}
+	if err := h.validateAssignees(w, r, groupID, assigneeIDs); err != nil {
+		return
+	}
+
+	assignees := make([]models.TaskAssignee, 0, len(assigneeIDs))
+	for _, id := range assigneeIDs {
+		assignees = append(assignees, models.TaskAssignee{ID: id})
+	}
+
 	task, err := h.repo.CreateTask(r.Context(), models.Task{
 		GroupID:     groupID,
 		Title:       req.Title,
 		Description: req.Description,
-		AssigneeID:  req.AssigneeID,
 		Status:      models.TaskStatusTodo,
 		DueDate:     due,
 		CreatedBy:   &userID,
+		Assignees:   assignees,
 	})
 	if err != nil {
+		log.Printf("CreateTask: %v (groupID=%s title=%q assignees=%v)", err, groupID, req.Title, assigneeIDs)
 		writeError(w, http.StatusInternalServerError, "failed to create task")
 		return
 	}
@@ -165,6 +184,60 @@ func (h *GroupHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": req.Status})
 }
+// updateTaskAssigneesRequest replaces a task's whole assignee set. An empty
+// slice unassigns everyone.
+type updateTaskAssigneesRequest struct {
+	AssigneeIDs []string `json:"assigneeIds"`
+}
+
+// UpdateTaskAssignees replaces a task's assignees with the given member list
+// (or clears them). The refreshed task is returned so the card updates live.
+func (h *GroupHandler) UpdateTaskAssignees(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	if !h.requireGroupMember(w, r, groupID) {
+		return
+	}
+	taskID := r.PathValue("taskId")
+	var req updateTaskAssigneesRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.validateAssignees(w, r, groupID, req.AssigneeIDs); err != nil {
+		return
+	}
+
+	task, err := h.repo.SetTaskAssignees(r.Context(), taskID, groupID, req.AssigneeIDs)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to update task assignees")
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+// validateAssignees writes a 400 when any id in the list is not a group member.
+// It returns a non-nil error to signal the caller should stop.
+func (h *GroupHandler) validateAssignees(w http.ResponseWriter, r *http.Request, groupID string, ids []string) error {
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		ok, err := h.repo.IsGroupMember(r.Context(), groupID, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check assignee")
+			return err
+		}
+		if !ok {
+			writeError(w, http.StatusBadRequest, "assignee is not a member of this group")
+			return err
+		}
+	}
+	return nil
+}
+
 // requireGroupMember enforces that the current user is a group member or owns
 // the course containing the group, writing 403 otherwise.
 func (h *GroupHandler) requireGroupMember(w http.ResponseWriter, r *http.Request, groupID string) bool {

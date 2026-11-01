@@ -1,42 +1,30 @@
-// FileVault: the group's shared file repository with upload, in-browser
-// preview (images/PDFs/text), and download via signed Supabase Storage URLs.
+// FileVault: the group's shared file repository with upload (with a pre-upload
+// naming step, up to 4 files, 20 MB each), rename, delete (type-name confirm),
+// in-browser preview, and download via signed Supabase Storage URLs.
 import { useEffect, useRef, useState } from 'react'
-import { Upload, FileText, FolderOpen, Download, Eye, X } from 'lucide-react'
+import { Upload, FolderOpen, X, Lock } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
 import type { VaultFile } from '../../types'
 import { GlassCard, Button, Spinner } from '../../components/ui'
-
-/** formatBytes renders a human-readable file size. */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/** formatDate renders a short local date. */
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
-}
-
-/** previewKind classifies a file by mime for the preview modal. */
-function previewKind(mimeType?: string): 'image' | 'pdf' | 'text' | 'other' {
-  if (!mimeType) return 'other'
-  if (mimeType.startsWith('image/')) return 'image'
-  if (mimeType === 'application/pdf') return 'pdf'
-  if (mimeType.startsWith('text/')) return 'text'
-  return 'other'
-}
+import { FileUploadModal, validateSelection } from './FileUploadModal'
+import { FileDeleteModal } from './FileDeleteModal'
+import { splitName } from './FileNameField'
+import { PreviewBody } from './FilePreview'
+import { FileRow } from './FileRow'
 
 export function FileVault({ groupId }: { groupId: string }) {
   const [files, setFiles] = useState<VaultFile[]>([])
   const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [nonMember, setNonMember] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Pending uploads (files chosen before naming/confirm) + delete/rename state.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [deleting, setDeleting] = useState<VaultFile | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [renaming, setRenaming] = useState<VaultFile | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
 
   // Preview state.
   const [preview, setPreview] = useState<{ file: VaultFile; url: string } | null>(null)
@@ -47,8 +35,15 @@ export function FileVault({ groupId }: { groupId: string }) {
     setError('')
     try {
       setFiles((await api.listFiles(groupId)) ?? [])
+      setNonMember(false)
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load files')
+      if (e instanceof ApiError && e.status === 403) {
+        setFiles([])
+        setNonMember(true)
+        setError('')
+      } else {
+        setError(e instanceof ApiError ? e.message : 'Failed to load files')
+      }
     } finally {
       setLoading(false)
     }
@@ -63,28 +58,73 @@ export function FileVault({ groupId }: { groupId: string }) {
     const t = setInterval(() => {
       void api
         .listFiles(groupId)
-        .then((fs) => setFiles(fs ?? []))
-        .catch(() => {})
+        .then((fs) => {
+          setFiles(fs ?? [])
+          setNonMember(false)
+        })
+        .catch(() => setNonMember(true))
     }, 5000)
     return () => clearInterval(t)
   }, [groupId])
 
-  const onPick = async (file: File | undefined) => {
-    if (!file) return
-    setUploading(true)
-    setError('')
-    try {
-      await api.uploadFile(groupId, file)
-      await load()
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Upload failed')
-    } finally {
-      setUploading(false)
+  const onPick = (list: FileList | null) => {
+    if (!list || list.length === 0 || nonMember) return
+    const chosen = Array.from(list)
+    const problem = validateSelection(chosen)
+    if (problem) {
+      setError(problem)
       if (inputRef.current) inputRef.current.value = ''
+      return
+    }
+    setError('')
+    setPendingFiles(chosen)
+  }
+
+  const onUploadDone = () => {
+    setPendingFiles([])
+    if (inputRef.current) inputRef.current.value = ''
+    void load()
+  }
+
+  const confirmDelete = async () => {
+    if (!deleting) return
+    setDeleteBusy(true)
+    try {
+      await api.deleteFile(groupId, deleting.id)
+      await load()
+      setDeleting(null)
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to delete')
+      throw e
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
+  const beginRename = (file: VaultFile) => {
+    setRenameDraft(splitName(file.name).stem)
+    setRenaming(file)
+  }
+
+  const saveRename = async () => {
+    if (!renaming) return
+    const stem = renameDraft.trim()
+    const fullName = stem + splitName(renaming.name).ext
+    if (!stem || fullName === renaming.name) {
+      setRenaming(null)
+      return
+    }
+    try {
+      const updated = await api.renameFile(groupId, renaming.id, fullName)
+      setFiles((prev) => prev.map((f) => (f.id === updated.id ? updated : f)))
+      setRenaming(null)
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to rename')
     }
   }
 
   const openPreview = async (file: VaultFile) => {
+    if (nonMember) return
     setPreviewLoading(true)
     setError('')
     try {
@@ -98,6 +138,7 @@ export function FileVault({ groupId }: { groupId: string }) {
   }
 
   const download = async (file: VaultFile) => {
+    if (nonMember) return
     setError('')
     try {
       const { url } = await api.fileUrl(groupId, file.id)
@@ -115,18 +156,23 @@ export function FileVault({ groupId }: { groupId: string }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="relative space-y-4">
+      <div className={`flex items-center justify-between ${nonMember ? 'blur-sm select-none' : ''}`}>
         <p className="text-sm text-[var(--text-secondary)]">{files.length} files</p>
-        <Button onClick={() => inputRef.current?.click()} disabled={uploading}>
-          {uploading ? <Spinner /> : <Upload size={16} />}
+        <Button onClick={() => inputRef.current?.click()} disabled={nonMember}>
+          <Upload size={16} />
           Upload
         </Button>
         <input
           ref={inputRef}
           type="file"
+          multiple
           className="hidden"
-          onChange={(e) => void onPick(e.target.files?.[0])}
+          disabled={nonMember}
+          onChange={(e) => {
+            onPick(e.target.files)
+            e.target.value = ''
+          }}
         />
       </div>
 
@@ -137,43 +183,63 @@ export function FileVault({ groupId }: { groupId: string }) {
           <Spinner />
         </div>
       ) : files.length === 0 ? (
-        <GlassCard className="p-10 text-center text-[var(--text-secondary)]">
+        <GlassCard className={`p-10 text-center text-[var(--text-secondary)] ${nonMember ? 'blur-sm select-none' : ''}`}>
           <FolderOpen size={40} className="mx-auto mb-3 opacity-40" />
           <p className="font-semibold text-[var(--text)]">Vault is empty</p>
           <p className="text-sm">Upload files to share with your group.</p>
         </GlassCard>
       ) : (
-        <GlassCard className="divide-y divide-[var(--border)]">
+        <GlassCard className={`divide-y divide-[var(--border)] ${nonMember ? 'blur-sm select-none' : ''}`}>
           {files.map((f) => (
-            <div key={f.id} className="flex items-center gap-3 p-4">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--accent)]/10 text-[var(--accent)]">
-                <FileText size={20} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{f.name}</p>
-                <p className="text-xs text-[var(--text-tertiary)]">
-                  {f.uploaderName || 'Unknown'} · {formatBytes(f.size)} · {formatDate(f.createdAt)}
-                </p>
-              </div>
-              <div className="flex gap-1">
-                <button
-                  className="btn-ghost p-2"
-                  onClick={() => openPreview(f)}
-                  aria-label={`Preview ${f.name}`}
-                >
-                  <Eye size={16} />
-                </button>
-                <button
-                  className="btn-ghost p-2"
-                  onClick={() => download(f)}
-                  aria-label={`Download ${f.name}`}
-                >
-                  <Download size={16} />
-                </button>
-              </div>
-            </div>
+            <FileRow
+              key={f.id}
+              file={f}
+              nonMember={nonMember}
+              renaming={renaming}
+              renameDraft={renameDraft}
+              onRenameDraft={setRenameDraft}
+              onBeginRename={beginRename}
+              onSaveRename={() => void saveRename()}
+              onCancelRename={() => setRenaming(null)}
+              onPreview={openPreview}
+              onDownload={download}
+              onDelete={setDeleting}
+            />
           ))}
         </GlassCard>
+      )}
+
+      {/* ---- Non-member privacy overlay ---- */}
+      {nonMember && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl bg-black/40 p-4 text-center backdrop-blur-md">
+          <Lock size={24} className="text-white" />
+          <p className="text-sm font-semibold text-white">You are not a member of this group</p>
+          <p className="text-xs text-white/70">Join this group to view and upload files.</p>
+        </div>
+      )}
+
+      {/* ---- Upload naming modal ---- */}
+      {pendingFiles.length > 0 && (
+        <FileUploadModal
+          groupId={groupId}
+          files={pendingFiles}
+          onClose={() => {
+            setPendingFiles([])
+            if (inputRef.current) inputRef.current.value = ''
+          }}
+          onDone={onUploadDone}
+        />
+      )}
+
+      {/* ---- Delete confirmation modal ---- */}
+      {deleting && (
+        <FileDeleteModal
+          file={deleting}
+          onClose={() => {
+            if (!deleteBusy) setDeleting(null)
+          }}
+          onConfirm={confirmDelete}
+        />
       )}
 
       {/* ---- Preview modal ---- */}
@@ -197,49 +263,4 @@ export function FileVault({ groupId }: { groupId: string }) {
       )}
     </div>
   )
-}
-
-/** PreviewBody renders the file in-browser based on its kind. */
-function PreviewBody({ url, mimeType }: { url: string; mimeType?: string }) {
-  const kind = previewKind(mimeType)
-  if (kind === 'image') {
-    return (
-      <div className="flex justify-center rounded-xl bg-[var(--surface)] p-2">
-        <img src={url} alt="Preview" className="max-h-[65vh] rounded-lg object-contain" />
-      </div>
-    )
-  }
-  if (kind === 'pdf') {
-    return (
-      <iframe src={url} title="PDF preview" className="h-[65vh] w-full rounded-lg border-0" />
-    )
-  }
-  if (kind === 'text') {
-    return <TextPreview url={url} />
-  }
-  return (
-    <div className="flex flex-col items-center gap-2 py-8 text-[var(--text-secondary)]">
-      <FileText size={40} className="opacity-40" />
-      <p className="text-sm">Preview not available for this file type — use download.</p>
-    </div>
-  )
-}
-
-/** TextPreview fetches a text file's content and renders it monospaced. */
-function TextPreview({ url }: { url: string }) {
-  const [text, setText] = useState('')
-  const [error, setError] = useState('')
-  useEffect(() => {
-    fetch(url)
-      .then((r) => {
-        if (!r.ok) throw new Error('Failed to fetch')
-        return r.text()
-      })
-      .then(setText)
-      .catch(() => setError('Failed to load text.'))
-  }, [url])
-
-  if (error) return <p className="py-8 text-center text-sm text-red-500">{error}</p>
-  if (!text) return <div className="flex justify-center py-8"><Spinner /></div>
-  return <pre className="max-h-[65vh] overflow-auto rounded-lg bg-[var(--surface)] p-4 text-xs">{text}</pre>
 }

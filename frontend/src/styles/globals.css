@@ -151,6 +151,25 @@ body {
     border-color: var(--accent);
   }
 
+  /* Destructive (delete) button. */
+  .btn-danger {
+    background: #ef4444;
+    color: #fff;
+    border-radius: 0.75rem;
+    font-weight: 600;
+    transition: opacity 0.2s ease, transform 0.1s ease;
+  }
+  .btn-danger:hover {
+    opacity: 0.9;
+  }
+  .btn-danger:active {
+    transform: scale(0.98);
+  }
+  .btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   /* Subtle divider. */
   .hairline {
     border-top: 1px solid var(--border);

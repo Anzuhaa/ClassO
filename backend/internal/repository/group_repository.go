@@ -25,8 +25,8 @@ func (r *Repo) CreateGroup(ctx context.Context, g models.Group) (*models.Group, 
 }
 
 // CreateGroups inserts multiple groups, all with the same capacity, returning
-// them in insertion order. Used to create several empty groups at once. Names
-// are suffixed ("Group 1", "Group 2", …) when more than one is requested.
+// them in insertion order. Names are suffixed ("Group 1", "Group 2", …) when
+// more than one is requested.
 func (r *Repo) CreateGroups(ctx context.Context, courseID, baseName string, capacity, count int) ([]models.Group, error) {
 	groups := make([]models.Group, 0, count)
 	for i := 0; i < count; i++ {
@@ -84,8 +84,7 @@ func (r *Repo) CreateGroupWithMembers(ctx context.Context, g models.Group, membe
 
 // ResetCourseGroups atomically removes every group membership and group within
 // a course so a fresh random assignment can redistribute the roster without
-// tripping the one-group-per-course unique constraint. Deleting the groups also
-// cascades to their messages, tasks, and files via FK ON DELETE CASCADE.
+// tripping the one-group-per-course unique constraint.
 func (r *Repo) ResetCourseGroups(ctx context.Context, courseID string) error {
 	return r.tx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
@@ -176,7 +175,7 @@ func (r *Repo) CountGroupMembers(ctx context.Context, groupID string) (int, erro
 }
 
 // GroupInCourseForUser returns the group id the user already belongs to within
-// the given course, or "" when the user is not yet in any group there.
+// the given course, or "" when not in any group there.
 func (r *Repo) GroupInCourseForUser(ctx context.Context, courseID, userID string) (string, error) {
 	var groupID string
 	err := r.Pool.QueryRow(ctx, `
@@ -193,8 +192,7 @@ func (r *Repo) GroupInCourseForUser(ctx context.Context, courseID, userID string
 
 // JoinGroup adds a user to a group as a "member". The UNIQUE (course_id,
 // user_id) constraint on group_members enforces the one-group-per-course rule
-// at the database level; this returns the raw conflict so callers can surface a
-// friendly message. Callers should also check capacity before joining.
+// at the DB level; callers should also check capacity before joining.
 func (r *Repo) JoinGroup(ctx context.Context, groupID, courseID, userID string) error {
 	_, err := r.Pool.Exec(ctx, `
 		INSERT INTO group_members (group_id, course_id, user_id, role)
@@ -220,7 +218,6 @@ func (r *Repo) IsGroupMember(ctx context.Context, groupID, userID string) (bool,
 }
 
 // RemoveGroupMember removes a user from a group (instructor or self-leave).
-// Returns ErrNotFound when the membership did not exist.
 func (r *Repo) RemoveGroupMember(ctx context.Context, groupID, userID string) error {
 	cmd, err := r.Pool.Exec(ctx, `
 		DELETE FROM group_members WHERE group_id = $1 AND user_id = $2
@@ -234,8 +231,24 @@ func (r *Repo) RemoveGroupMember(ctx context.Context, groupID, userID string) er
 	return nil
 }
 
+// RenameGroup updates a group's name and returns the refreshed group.
+func (r *Repo) RenameGroup(ctx context.Context, id, name string) (*models.Group, error) {
+	row := r.Pool.QueryRow(ctx, `
+		UPDATE groups SET name = $1, updated_at = now()
+		WHERE id = $2
+		RETURNING id, course_id, name, capacity, created_at
+	`, name, id)
+	var g models.Group
+	if err := row.Scan(&g.ID, &g.CourseID, &g.Name, &g.Capacity, &g.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &g, nil
+}
+
 // DeleteGroup removes a group (and its messages/files/tasks via FK cascade).
-// Returns ErrNotFound when the group does not exist.
 func (r *Repo) DeleteGroup(ctx context.Context, groupID string) error {
 	cmd, err := r.Pool.Exec(ctx, `DELETE FROM groups WHERE id = $1`, groupID)
 	if err != nil {
@@ -247,8 +260,6 @@ func (r *Repo) DeleteGroup(ctx context.Context, groupID string) error {
 	return nil
 }
 
-// GetGroupsForUser returns the groups a user belongs to, for the workspace
-// switcher.
 func (r *Repo) GetGroupsForUser(ctx context.Context, userID string) ([]models.Group, error) {
 	rows, err := r.Pool.Query(ctx, `
 		SELECT g.id, g.course_id, g.name, g.capacity, g.created_at

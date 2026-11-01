@@ -90,6 +90,12 @@ type File struct {
 	UploaderName string `json:"uploaderName,omitempty"`
 }
 
+// TaskAssignee is a single assignee on a task (denormalized for the board).
+type TaskAssignee struct {
+	ID       string `json:"id"`
+	FullName string `json:"fullName"`
+}
+
 // Task mirrors the tasks table; Status is "todo", "in_progress", or "done".
 type Task struct {
 	ID          string     `json:"id"`
@@ -104,6 +110,9 @@ type Task struct {
 	UpdatedAt   time.Time  `json:"updatedAt"`
 
 	AssigneeName string `json:"assigneeName,omitempty"`
+
+	// Assignees is the canonical multi-assignee list (from task_assignees).
+	Assignees []TaskAssignee `json:"assignees,omitempty"`
 }
 
 // Task status constants.

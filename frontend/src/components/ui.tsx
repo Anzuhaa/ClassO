@@ -31,11 +31,11 @@ export function Button({
   ...rest
 }: {
   children: ReactNode
-  variant?: 'primary' | 'ghost'
+  variant?: 'primary' | 'ghost' | 'danger'
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   const base =
     'inline-flex items-center justify-center gap-2 px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed'
-  const style = variant === 'primary' ? 'btn-primary' : 'btn-ghost'
+  const style = variant === 'primary' ? 'btn-primary' : variant === 'danger' ? 'btn-danger' : 'btn-ghost'
   return (
     <button className={`${base} ${style} ${className}`} {...rest}>
       {children}

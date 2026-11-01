@@ -82,8 +82,10 @@ function roleFromMeta(user: { user_metadata?: Record<string, unknown> } | undefi
   return r === 'instructor' ? 'instructor' : 'student'
 }
 
-/** register creates a new account and returns the session user. The new user's
- * profile row is created automatically by the backend (handle_new_user). */
+/** register creates a new account without signing the user in. The new user's
+ * profile row is created automatically by the backend (handle_new_user). Any
+ * session Supabase returns from auto-confirm is discarded (and signed out) so
+ * the caller can redirect to the login screen instead of auto-authenticating. */
 export async function register(email: string, password: string, fullName: string): Promise<AuthUser> {
   const sb = getSupabase()
   if (!sb) throw new Error('Supabase is not configured (missing VITE_SUPABASE_* env).')
@@ -95,20 +97,17 @@ export async function register(email: string, password: string, fullName: string
   })
   if (error) throw new Error(error.message)
 
-  const session = data.session
-  if (session) {
-    const role = roleFromMeta(session.user)
-    persistSession(session.access_token, {
-      id: session.user.id,
-      email: session.user.email ?? email,
-      fullName,
-      role,
-    })
-    return { id: session.user.id, email: email, fullName, role }
+  // Auto-confirm returns a session immediately; drop it so the caller can send
+  // the user to /login rather than auto-signing them in.
+  if (data.session) {
+    try {
+      await sb.auth.signOut()
+    } catch {
+      /* ignore */
+    }
   }
+  clearSession()
 
-  // No session returned (some projects require confirmation); treat as a
-  // provisional user so the UI can still proceed in auto-confirm mode.
   const user = data.user
   if (user) {
     const role = roleFromMeta(user)

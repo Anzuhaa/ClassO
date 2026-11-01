@@ -192,6 +192,67 @@ func (h *GroupHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+// renameGroupRequest is the payload for renaming a group workspace.
+type renameGroupRequest struct {
+	Name string `json:"name"`
+}
+
+// Get returns a single group by id. Member or course owner only.
+func (h *GroupHandler) Get(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	if !h.requireGroupMember(w, r, groupID) {
+		return
+	}
+	group, err := h.repo.GetGroup(r.Context(), groupID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load group")
+		return
+	}
+	writeJSON(w, http.StatusOK, group)
+}
+
+// Rename updates a group's name (instructor action). The refreshed group is
+// returned so the workspace header, breadcrumbs, and sidebar can resync.
+func (h *GroupHandler) Rename(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	group, err := h.repo.GetGroup(r.Context(), groupID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load group")
+		return
+	}
+	if !h.requireCourseInstructor(w, r, group.CourseID) {
+		return
+	}
+	var req renameGroupRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	updated, err := h.repo.RenameGroup(r.Context(), groupID, name)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to rename group")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // requireCourseInstructor enforces that the current user owns the course or
 // holds the instructor role within it, writing 403 otherwise.
 func (h *GroupHandler) requireCourseInstructor(w http.ResponseWriter, r *http.Request, courseID string) bool {

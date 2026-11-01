@@ -14,9 +14,11 @@ export function AuthScreen({ onAuthed }: { onAuthed: (user: AuthUser) => void })
   const [fullName, setFullName] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
 
   const submit = async () => {
     setError('')
+    setNotice('')
     if (!email.trim() || !password) {
       setError('Email and password are required.')
       return
@@ -27,10 +29,16 @@ export function AuthScreen({ onAuthed }: { onAuthed: (user: AuthUser) => void })
     }
     setSubmitting(true)
     try {
-      const user =
-        mode === 'login'
-          ? await login(email.trim(), password)
-          : await register(email.trim(), password, fullName.trim())
+      if (mode === 'register') {
+        // Register, then flip to login rather than auto-signing in.
+        await register(email.trim(), password, fullName.trim())
+        setNotice('Registration successful! Please sign in with your credentials.')
+        setMode('login')
+        setEmail(email.trim())
+        setPassword('')
+        return
+      }
+      const user = await login(email.trim(), password)
       onAuthed(user)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Authentication failed')
@@ -88,6 +96,9 @@ export function AuthScreen({ onAuthed }: { onAuthed: (user: AuthUser) => void })
           />
         </Label>
 
+        {notice && (
+          <p className="rounded-lg bg-green-500/10 px-3 py-2 text-sm text-green-600 dark:text-green-400">{notice}</p>
+        )}
         {error && <p className="text-sm text-red-500">{error}</p>}
 
         <Button onClick={submit} disabled={submitting} className="w-full">
@@ -102,6 +113,7 @@ export function AuthScreen({ onAuthed }: { onAuthed: (user: AuthUser) => void })
             onClick={() => {
               setMode(mode === 'login' ? 'register' : 'login')
               setError('')
+              setNotice('')
             }}
           >
             {mode === 'login' ? 'Register' : 'Sign in'}

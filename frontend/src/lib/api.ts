@@ -135,6 +135,12 @@ export const api = {
     }),
   deleteGroup: (groupId: string) =>
     request<{ status: string }>(`/groups/${groupId}`, { method: 'DELETE' }),
+  renameGroup: (groupId: string, name: string) =>
+    request<Group>(`/groups/${groupId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  getGroup: (groupId: string) => request<Group>(`/groups/${groupId}`),
   listMessages: (groupId: string) => request<Message[]>(`/groups/${groupId}/messages`),
   sendMessage: (groupId: string, content: string) =>
     request<Message>(`/groups/${groupId}/messages`, {
@@ -144,7 +150,7 @@ export const api = {
   listTasks: (groupId: string) => request<Task[]>(`/groups/${groupId}/tasks`),
   createTask: (
     groupId: string,
-    body: { title: string; description?: string; assigneeId?: string; dueDate?: string },
+    body: { title: string; description?: string; assigneeIds?: string[]; dueDate?: string },
   ) =>
     request<Task>(`/groups/${groupId}/tasks`, {
       method: 'POST',
@@ -155,15 +161,23 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+  updateTaskAssignees: (groupId: string, taskId: string, assigneeIds: string[]) =>
+    request<Task>(`/groups/${groupId}/tasks/${taskId}/assignees`, {
+      method: 'PUT',
+      body: JSON.stringify({ assigneeIds }),
+    }),
   listFiles: (groupId: string) => request<VaultFile[]>(`/groups/${groupId}/files`),
   fileUrl: (groupId: string, fileId: string) =>
     request<{ url: string; name: string; mimeType: string }>(
       `/groups/${groupId}/files/${fileId}/url`,
     ),
-  // Multipart upload (not JSON, so it bypasses the JSON request helper).
-  uploadFile: async (groupId: string, file: File): Promise<VaultFile> => {
+  // Multipart upload (not JSON, so it bypasses the JSON request helper). A
+  // custom `name` overrides the chosen file's own filename so the user can
+  // rename before upload.
+  uploadFile: async (groupId: string, file: File, name?: string): Promise<VaultFile> => {
     const form = new FormData()
     form.append('file', file)
+    if (name) form.append('name', name)
     const token = getAccessToken()
     const headers: Record<string, string> = {}
     if (token) headers.Authorization = `Bearer ${token}`
@@ -184,4 +198,11 @@ export const api = {
     }
     return res.json()
   },
+  renameFile: (groupId: string, fileId: string, name: string) =>
+    request<VaultFile>(`/groups/${groupId}/files/${fileId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteFile: (groupId: string, fileId: string) =>
+    request<{ status: string }>(`/groups/${groupId}/files/${fileId}`, { method: 'DELETE' }),
 }

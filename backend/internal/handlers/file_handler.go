@@ -24,8 +24,8 @@ import (
 // urlTokenTTL is how long a proxied download URL stays valid.
 const urlTokenTTL = time.Hour
 
-// maxUploadBytes caps a single vault file upload at 15 MiB.
-const maxUploadBytes = 15 << 20
+// maxUploadBytes caps a single vault file upload at 20 MiB.
+const maxUploadBytes = 20 << 20
 
 // FileHandler serves file-vault uploads, metadata listings, and signed URLs.
 type FileHandler struct {
@@ -67,7 +67,13 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A client may override the display name (so the user can rename before
+	// upload); otherwise fall back to the chosen file's filename. The original
+	// extension is preserved when the override omits one.
 	name := sanitizeName(header.Filename)
+	if renamed := strings.TrimSpace(r.FormValue("name")); renamed != "" {
+		name = ensureExtension(renamed, header.Filename)
+	}
 	// Object key: {groupID}/{name}.
 	objectKey := filepath.ToSlash(filepath.Join(groupID, name))
 
@@ -106,6 +112,84 @@ func (h *FileHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, files)
+}
+
+// renameFileRequest is the payload for renaming a vault file.
+type renameFileRequest struct {
+	Name string `json:"name"`
+}
+
+// Rename updates a file's display name. Member or course owner only.
+func (h *FileHandler) Rename(w http.ResponseWriter, r *http.Request) {
+	fileID := r.PathValue("fileId")
+	record, err := h.repo.GetFile(r.Context(), fileID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load file")
+		return
+	}
+	if !h.requireGroupMember(w, r, record.GroupID) {
+		return
+	}
+
+	var req renameFileRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	name := ensureExtension(req.Name, record.Name)
+	if name == "" || name == "upload.bin" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	updated, err := h.repo.RenameFile(r.Context(), fileID, name)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to rename file")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// Delete removes a file's metadata row and its storage object. The metadata is
+// deleted first so a storage failure never leaves a dangling DB reference.
+func (h *FileHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	fileID := r.PathValue("fileId")
+	record, err := h.repo.GetFile(r.Context(), fileID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load file")
+		return
+	}
+	if !h.requireGroupMember(w, r, record.GroupID) {
+		return
+	}
+
+	deleted, err := h.repo.DeleteFile(r.Context(), fileID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to delete file")
+		return
+	}
+
+	// Best-effort removal of the storage object; the metadata is already gone.
+	if err := h.storage.Delete(r.Context(), deleted.StoragePath); err != nil {
+		// Log but don't fail the request — the file is no longer visible.
+		fmt.Printf("Delete: failed to remove storage object %s: %v\n", deleted.StoragePath, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // URL returns a short-lived backend download URL for a single file so the
@@ -220,6 +304,24 @@ func sanitizeName(name string) string {
 	return name
 }
 
+// ensureExtension keeps a renamed file's type intact: when the user types a new
+// name without an extension, the original file's extension is re-appended so the
+// MIME type (and preview/download handling) is never lost. A name that already
+// carries any extension is left as-is.
+func ensureExtension(newName, originalName string) string {
+	newName = sanitizeName(newName)
+	if newName == "" || newName == "upload.bin" {
+		return newName
+	}
+	if filepath.Ext(newName) != "" {
+		return newName
+	}
+	if ext := filepath.Ext(sanitizeName(originalName)); ext != "" {
+		return newName + ext
+	}
+	return newName
+}
+
 // StorageClient wraps the Supabase Storage REST API for uploads and signed
 // URLs using the service-role key (server-side only; the key never leaves the
 // backend).
@@ -317,6 +419,34 @@ func (s *StorageClient) Download(ctx context.Context, path string) ([]byte, stri
 		return nil, "", err
 	}
 	return data, resp.Header.Get("Content-Type"), nil
+}
+
+// Delete removes a vault object from the private bucket by its storage path
+// ("{bucket}/{objectKey}").
+func (s *StorageClient) Delete(ctx context.Context, path string) error {
+	if s.baseURL == "" || s.serviceKey == "" {
+		return fmt.Errorf("storage not configured")
+	}
+
+	objectPath := strings.TrimPrefix(path, storageBucket+"/")
+	u := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.baseURL, storageBucket, escapeObjectPath(objectPath))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
+
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("storage delete failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 // downloadTokenSecret derives an HMAC key for proxied-download tokens from the

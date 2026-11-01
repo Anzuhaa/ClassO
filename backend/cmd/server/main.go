@@ -82,15 +82,20 @@ func main() {
 	mux.HandleFunc("POST /v1/groups/{id}/leave", groupHandler.LeaveGroup)
 	mux.HandleFunc("DELETE /v1/groups/{id}/members", groupHandler.RemoveMember)
 	mux.HandleFunc("DELETE /v1/groups/{id}", groupHandler.DeleteGroup)
+	mux.HandleFunc("GET /v1/groups/{id}", groupHandler.Get)
+	mux.HandleFunc("PATCH /v1/groups/{id}", groupHandler.Rename)
 	mux.HandleFunc("GET /v1/groups/{id}/messages", groupHandler.Messages)
 	mux.HandleFunc("POST /v1/groups/{id}/messages", groupHandler.SendMessage)
 	mux.HandleFunc("GET /v1/groups/{id}/tasks", groupHandler.Tasks)
 	mux.HandleFunc("POST /v1/groups/{id}/tasks", groupHandler.CreateTask)
 	mux.HandleFunc("PATCH /v1/groups/{id}/tasks/{taskId}", groupHandler.UpdateTaskStatus)
+	mux.HandleFunc("PUT /v1/groups/{id}/tasks/{taskId}/assignees", groupHandler.UpdateTaskAssignees)
 
 	// File vault.
 	mux.HandleFunc("POST /v1/groups/{id}/files", fileHandler.Upload)
 	mux.HandleFunc("GET /v1/groups/{id}/files", fileHandler.List)
+	mux.HandleFunc("PATCH /v1/groups/{id}/files/{fileId}", fileHandler.Rename)
+	mux.HandleFunc("DELETE /v1/groups/{id}/files/{fileId}", fileHandler.Delete)
 	mux.HandleFunc("GET /v1/groups/{id}/files/{fileId}/url", fileHandler.URL)
 	mux.HandleFunc("GET /v1/groups/{id}/files/{fileId}/download", fileHandler.Download)
 

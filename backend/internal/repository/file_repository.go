@@ -66,3 +66,41 @@ func (r *Repo) GetFile(ctx context.Context, id string) (*models.File, error) {
 	}
 	return &f, nil
 }
+
+// RenameFile updates a file's display name and returns the refreshed record.
+// The storage object key is left unchanged (it still holds the bytes); the
+// download endpoint already resolves both bytes and filename independently.
+func (r *Repo) RenameFile(ctx context.Context, id, name string) (*models.File, error) {
+	row := r.Pool.QueryRow(ctx, `
+		UPDATE files SET name = $1 WHERE id = $2
+		RETURNING id, group_id, uploader_id, name, storage_path, size, COALESCE(mime_type, ''), created_at
+	`, name, id)
+
+	var f models.File
+	if err := row.Scan(&f.ID, &f.GroupID, &f.UploaderID, &f.Name, &f.StoragePath, &f.Size, &f.MimeType, &f.CreatedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &f, nil
+}
+
+// DeleteFile removes a file's metadata row and returns the deleted record so
+// the handler can also remove the underlying storage object.
+func (r *Repo) DeleteFile(ctx context.Context, id string) (*models.File, error) {
+	row := r.Pool.QueryRow(ctx, `
+		DELETE FROM files
+		WHERE id = $1
+		RETURNING id, group_id, uploader_id, name, storage_path, size, COALESCE(mime_type, ''), created_at
+	`, id)
+
+	var f models.File
+	if err := row.Scan(&f.ID, &f.GroupID, &f.UploaderID, &f.Name, &f.StoragePath, &f.Size, &f.MimeType, &f.CreatedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &f, nil
+}

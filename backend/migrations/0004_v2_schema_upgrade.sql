@@ -17,14 +17,25 @@ drop table if exists public.ai_summaries;
 alter table public.courses
   add column if not exists join_code_expires_at timestamptz;
 
--- 4. Add per-group capacity, backfilled from the old courses.group_size.
+-- 4. Add per-group capacity, backfilled from the old courses.group_size
+--    (only present in a true-v1 database; on a schema already built from
+--    schema.sql the column does not exist and capacity defaults to 4).
 alter table public.groups
   add column if not exists capacity int;
 
-update public.groups g
-  set capacity = c.group_size
-  from public.courses c
-  where c.id = g.course_id and g.capacity is null;
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'courses' and column_name = 'group_size'
+  ) then
+    update public.groups g
+      set capacity = c.group_size
+      from public.courses c
+      where c.id = g.course_id and g.capacity is null;
+  end if;
+end;
+$$;
 
 alter table public.groups
   alter column capacity set default 4,

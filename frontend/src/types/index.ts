@@ -64,6 +64,11 @@ export interface VaultFile {
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done'
 
+export interface TaskAssignee {
+  id: string
+  fullName: string
+}
+
 export interface Task {
   id: string
   groupId: string
@@ -76,6 +81,7 @@ export interface Task {
   createdAt: string
   updatedAt: string
   assigneeName?: string
+  assignees?: TaskAssignee[]
 }
 
 export interface FormationResult {
