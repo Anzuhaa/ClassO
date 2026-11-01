@@ -3,12 +3,15 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +20,9 @@ import (
 	"github.com/classo/backend/internal/models"
 	"github.com/classo/backend/internal/repository"
 )
+
+// urlTokenTTL is how long a proxied download URL stays valid.
+const urlTokenTTL = time.Hour
 
 // maxUploadBytes caps a single vault file upload at 15 MiB.
 const maxUploadBytes = 15 << 20
@@ -102,9 +108,10 @@ func (h *FileHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, files)
 }
 
-// URL returns a short-lived signed URL for a single file so the frontend can
-// preview (images/PDFs/text) or trigger a download via Supabase Storage.
-// Member or course owner only.
+// URL returns a short-lived backend download URL for a single file so the
+// frontend can preview (images/PDFs/text) or trigger a download. The URL is
+// proxied through /download to keep the private vault bucket's bytes off a
+// public Supabase URL. Member or course owner only.
 func (h *FileHandler) URL(w http.ResponseWriter, r *http.Request) {
 	fileID := r.PathValue("fileId")
 	record, err := h.repo.GetFile(r.Context(), fileID)
@@ -120,14 +127,69 @@ func (h *FileHandler) URL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signed, err := h.storage.CreateSignedURL(r.Context(), record.StoragePath, time.Hour)
+	token := h.storage.signDownloadToken(record.ID)
+	downloadURL := fmt.Sprintf("/v1/groups/%s/files/%s/download?token=%s", record.GroupID, record.ID, url.QueryEscape(token))
+	writeJSON(w, http.StatusOK, map[string]string{"url": downloadURL, "name": record.Name, "mimeType": record.MimeType})
+}
+
+// Download streams a vault file's bytes to the client after validating a
+// short-lived token in the query string (so <img>/<iframe>/downloads work
+// without an Authorization header). The bytes are fetched from the private
+// vault bucket using the service-role key.
+func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
+	fileID := r.PathValue("fileId")
+
+	record, err := h.repo.GetFile(r.Context(), fileID)
 	if err != nil {
-		// Surface the underlying storage error (missing bucket, bad key, etc.)
-		// so the failure is diagnosable instead of a generic 500.
-		writeError(w, http.StatusBadGateway, "failed to sign URL: "+err.Error())
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load file")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"url": signed, "name": record.Name, "mimeType": record.MimeType})
+
+	// Validate the short-lived token first (no membership DB check needed here:
+	// only a request that already passed membership can mint a valid token).
+	if !h.storage.verifyDownloadToken(record.ID, r.URL.Query().Get("token")) {
+		writeError(w, http.StatusForbidden, "invalid or expired download link")
+		return
+	}
+
+	data, mime, err := h.storage.Download(r.Context(), record.StoragePath)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to fetch file: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", firstNonEmpty(mime, "application/octet-stream"))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	// Inline preview for images/PDFs/text; attachment for the rest so the
+	// browser offers a download rather than rendering arbitrary bytes.
+	if isPreviewable(mime) {
+		w.Header().Set("Content-Disposition", "inline; filename=\""+sanitizeName(record.Name)+"\"")
+	} else {
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+sanitizeName(record.Name)+"\"")
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// isPreviewable reports whether a MIME type should render inline in the browser.
+func isPreviewable(mime string) bool {
+	return strings.HasPrefix(mime, "image/") ||
+		mime == "application/pdf" ||
+		strings.HasPrefix(mime, "text/")
+}
+
+// firstNonEmpty returns the first non-empty string, else fallback.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // requireGroupMember enforces that the current user is a group member or owns
@@ -224,63 +286,76 @@ func escapeObjectPath(objectKey string) string {
 	return strings.Join(segs, "/")
 }
 
-// CreateSignedURL asks Supabase Storage to mint a signed URL for an object via
-// its server-side sign endpoint, authenticated with the service-role key. The
-// returned URL is short-lived and grants temporary access without exposing any
-// secret to the client.
-func (s *StorageClient) CreateSignedURL(ctx context.Context, path string, expires time.Duration) (string, error) {
+// Download fetches a vault object's bytes from the private bucket using the
+// service-role key, returning the data and its MIME type.
+func (s *StorageClient) Download(ctx context.Context, path string) ([]byte, string, error) {
 	if s.baseURL == "" || s.serviceKey == "" {
-		return "", fmt.Errorf("storage not configured")
+		return nil, "", fmt.Errorf("storage not configured")
 	}
 
-	// path may already include the bucket prefix or be just the object key.
 	objectPath := strings.TrimPrefix(path, storageBucket+"/")
-
-	// The sign endpoint expects a JSON body with the desired expiry in seconds.
-	body, err := json.Marshal(map[string]any{"expiresIn": int(expires.Seconds())})
+	u := fmt.Sprintf("%s/storage/v1/object/authenticated/%s/%s", s.baseURL, storageBucket, escapeObjectPath(objectPath))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
-	}
-
-	u := fmt.Sprintf("%s/storage/v1/object/sign/%s/%s", s.baseURL, storageBucket, escapeObjectPath(objectPath))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
-	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("signed url request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, "", fmt.Errorf("storage download failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	// Supabase returns the URL under "signedURL" (current API) or "signedUrl"
-	// (older); accept either so a casing change can't break downloads.
-	var out struct {
-		SignedURL string `json:"signedURL"`
-		SignedUrl string `json:"signedUrl"`
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
 	}
-	if err := json.Unmarshal(respBody, &out); err != nil {
-		return "", fmt.Errorf("signed url response unparsable: %s", strings.TrimSpace(string(respBody)))
+	return data, resp.Header.Get("Content-Type"), nil
+}
+
+// downloadTokenSecret derives an HMAC key for proxied-download tokens from the
+// service-role key (already server-only and high-entropy).
+func (s *StorageClient) downloadTokenSecret() []byte {
+	return []byte("classo.download." + s.serviceKey)
+}
+
+// signDownloadToken mints a short-lived HMAC token binding a file id. The path
+// is intentionally NOT embedded (it is re-read from the database on download),
+// so filenames containing "." cannot corrupt the "part.delimiter" format below.
+func (s *StorageClient) signDownloadToken(fileID string) string {
+	exp := time.Now().Add(urlTokenTTL).Unix()
+	msg := fileID + "." + strconv.FormatInt(exp, 10)
+	mac := hmac.New(sha256.New, s.downloadTokenSecret())
+	mac.Write([]byte(msg))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return msg + "." + sig
+}
+
+// verifyDownloadToken checks a token's signature and expiry against a file id.
+func (s *StorageClient) verifyDownloadToken(fileID, token string) bool {
+	if token == "" {
+		return false
 	}
-	signed := out.SignedURL
-	if signed == "" {
-		signed = out.SignedUrl
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return false
 	}
-	if signed == "" {
-		return "", fmt.Errorf("signed url response missing signedURL: %s", strings.TrimSpace(string(respBody)))
+	if parts[0] != fileID {
+		return false
 	}
-	// Supabase returns a protocol-relative path (e.g. "/object/sign/..."); make it
-	// absolute so the browser can fetch it directly without the app's proxy.
-	if strings.HasPrefix(signed, "/") {
-		signed = s.baseURL + signed
+	exp, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return false
 	}
-	return signed, nil
+	msg := parts[0] + "." + parts[1]
+	mac := hmac.New(sha256.New, s.downloadTokenSecret())
+	mac.Write([]byte(msg))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(parts[2]), []byte(expected))
 }

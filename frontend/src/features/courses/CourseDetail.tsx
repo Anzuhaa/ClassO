@@ -11,6 +11,7 @@ import { GlassCard, Spinner } from '../../components/ui'
 import { GroupCard } from './GroupCard'
 import { RosterPanel } from './RosterPanel'
 import { InstructorControls, joinCodeActive } from './InstructorControls'
+import { LeaveGroupModal } from './LeaveGroupModal'
 
 export function CourseDetail() {
   const { courseId = '' } = useParams()
@@ -26,12 +27,12 @@ export function CourseDetail() {
   const [error, setError] = useState('')
   const [forbidden, setForbidden] = useState(false)
   const [assignCapacity, setAssignCapacity] = useState(4)
+  const [confirmLeave, setConfirmLeave] = useState(false)
+  const [leavingGroup, setLeavingGroup] = useState(false)
 
   const userId = getStoredUser()?.id ?? ''
 
-  // Tick once a second while the page is open so a join code that expires (or is
-  // cleared) in the current session flips the badge from "Active" to "Expired"
-  // (and vice-versa after regeneration) without a manual reload.
+  // Tick to flip the join-code badge live as expiry is reached/cleared.
   const [, setNow] = useState(() => Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
@@ -70,8 +71,7 @@ export function CourseDetail() {
 
   const isInstructor =
     !!course &&
-    (course.ownerId === userId ||
-      members.some((m) => m.id === userId && m.courseRole === 'instructor'))
+    (course.ownerId === userId || members.some((m) => m.id === userId && m.courseRole === 'instructor'))
 
   const runRandomAssign = async () => {
     setError('')
@@ -142,13 +142,16 @@ export function CourseDetail() {
 
   const leaveGroup = async () => {
     setError('')
-    setMessage('')
+    setLeavingGroup(true)
     try {
       await api.leaveGroup(myGroupId)
       setMessage('Left the group.')
+      setConfirmLeave(false)
       await load()
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to leave group')
+    } finally {
+      setLeavingGroup(false)
     }
   }
 
@@ -267,7 +270,7 @@ export function CourseDetail() {
                   joining={joining}
                   onOpen={() => navigate(`/courses/${courseId}/groups/${g.id}`)}
                   onJoin={() => joinGroup(g)}
-                  onLeave={leaveGroup}
+                  onLeave={() => setConfirmLeave(true)}
                   onDelete={() => deleteGroup(g)}
                 />
               ))}
@@ -284,6 +287,15 @@ export function CourseDetail() {
           />
         )}
       </div>
+
+      {/* ---- Leave group double confirmation ---- */}
+      <LeaveGroupModal
+        open={confirmLeave}
+        leaving={leavingGroup}
+        error={error}
+        onClose={() => setConfirmLeave(false)}
+        onConfirm={leaveGroup}
+      />
     </div>
   )
 }

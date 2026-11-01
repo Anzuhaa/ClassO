@@ -92,6 +92,7 @@ func main() {
 	mux.HandleFunc("POST /v1/groups/{id}/files", fileHandler.Upload)
 	mux.HandleFunc("GET /v1/groups/{id}/files", fileHandler.List)
 	mux.HandleFunc("GET /v1/groups/{id}/files/{fileId}/url", fileHandler.URL)
+	mux.HandleFunc("GET /v1/groups/{id}/files/{fileId}/download", fileHandler.Download)
 
 	// 5. Apply middleware: logging -> CORS -> auth.
 	var root http.Handler = mux

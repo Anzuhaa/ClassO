@@ -1,6 +1,6 @@
 // GroupCard: a single group's card in the course detail view, with join, leave
 // (students), and delete (instructors) actions plus capacity/duplicate UI hints.
-import { Check, LogIn, Trash2 } from 'lucide-react'
+import { Check, LogIn, LogOut, Trash2 } from 'lucide-react'
 import type { Group } from '../../types'
 import { GlassCard, Button, Spinner } from '../../components/ui'
 
@@ -64,8 +64,12 @@ export function GroupCard({
             <span className="inline-flex items-center gap-1 text-xs font-medium text-green-500">
               <Check size={14} /> Joined
             </span>
-            <button className="text-xs text-[var(--text-tertiary)] hover:text-red-500" onClick={onLeave}>
-              Leave
+            <button
+              className="inline-flex items-center gap-1 rounded-lg border border-red-500/30 px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
+              onClick={onLeave}
+            >
+              <LogOut size={13} />
+              Leave Group
             </button>
           </span>
         ) : (

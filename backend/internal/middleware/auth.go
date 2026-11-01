@@ -43,6 +43,15 @@ const demoUserID = "00000000-0000-0000-0000-000000000001"
 func Auth(cfg *config.Config, repo *repository.Repo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Bypass auth for the file-download proxy: it is authenticated by a
+			// short-lived token in the query string instead of an Authorization
+			// header, because the browser loads these URLs directly (<img>,
+			// <iframe>, <a download>) and cannot attach a header.
+			if isTokenAuthedDownload(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			userID := resolveIdentity(cfg, repo, r)
 			if userID == "" {
 				writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -53,6 +62,13 @@ func Auth(cfg *config.Config, repo *repository.Repo) func(http.Handler) http.Han
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// isTokenAuthedDownload reports whether a request targets the vault
+// file-download endpoint, which authenticates via a query token rather than the
+// Authorization header.
+func isTokenAuthedDownload(r *http.Request) bool {
+	return strings.Contains(r.URL.Path, "/files/") && strings.HasSuffix(r.URL.Path, "/download")
 }
 
 // resolveIdentity returns the authenticated user id from the request, or "".

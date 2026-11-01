@@ -119,18 +119,18 @@ export function CourseList({ onCreated, isInstructor }: { onCreated: () => void;
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
+      <header className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <h2 className="text-2xl font-bold">My Courses</h2>
           <p className="text-sm text-[var(--text-secondary)]">Manage courses and group formation</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="ghost" onClick={() => setShowJoin(true)}>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="ghost" onClick={() => setShowJoin(true)} className="shrink-0 whitespace-nowrap">
             <LogIn size={16} />
             Join Course
           </Button>
           {isInstructor && (
-            <Button onClick={() => setShowForm((s) => !s)}>
+            <Button onClick={() => setShowForm((s) => !s)} className="shrink-0 whitespace-nowrap">
               <Plus size={16} />
               New Course
             </Button>
@@ -237,40 +237,33 @@ export function CourseList({ onCreated, isInstructor }: { onCreated: () => void;
                 className="group cursor-pointer p-5 transition-transform hover:-translate-y-0.5"
                 onClick={() => navigate(`/courses/${c.id}`)}
               >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="font-semibold">{c.name}</h3>
-                    <p className="text-sm text-[var(--text-secondary)]">{c.code || `Join: ${c.joinCode}`}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold">{c.name}</h3>
+                    <p className="truncate text-sm text-[var(--text-secondary)]">{c.code || `Join: ${c.joinCode}`}</p>
                   </div>
-                  <Users size={20} className="text-[var(--text-tertiary)]" />
+                  {c.ownerId === userId && (
+                    <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => navigate(`/courses/${c.id}`)}
+                        className="rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-[var(--accent)]"
+                        aria-label={`View groups & members for ${c.name}`}
+                        title="View groups & members"
+                      >
+                        <LayoutGrid size={16} />
+                      </button>
+                      <button
+                        onClick={() => setDeleteTarget(c)}
+                        className="rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-red-500"
+                        aria-label={`Delete ${c.name}`}
+                        title="Delete course"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </GlassCard>
-              {c.ownerId === userId && (
-                <div className="absolute right-2 top-2 flex gap-1.5">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      navigate(`/courses/${c.id}`)
-                    }}
-                    className="rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-[var(--accent)]"
-                    aria-label={`View groups & members for ${c.name}`}
-                    title="View groups & members"
-                  >
-                    <LayoutGrid size={16} />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleteTarget(c)
-                    }}
-                    className="rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface)] hover:text-red-500"
-                    aria-label={`Delete ${c.name}`}
-                    title="Delete course"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              )}
             </div>
           ))}
         </div>
