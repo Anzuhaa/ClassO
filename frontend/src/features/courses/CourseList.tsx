@@ -6,7 +6,7 @@ import { Plus, Users, LogIn, X, ClipboardPaste, Trash2, LayoutGrid } from 'lucid
 import { api, ApiError } from '../../lib/api'
 import { getStoredUser } from '../../lib/auth'
 import type { Course } from '../../types'
-import { GlassCard, Button, Input, Label, Spinner } from '../../components/ui'
+import { GlassCard, Button, Input, Label, Spinner, Skeleton, SkeletonText } from '../../components/ui'
 
 export function CourseList({ onCreated, isInstructor }: { onCreated: () => void; isInstructor: boolean }) {
   const navigate = useNavigate()
@@ -218,8 +218,18 @@ export function CourseList({ onCreated, isInstructor }: { onCreated: () => void;
       )}
 
       {loading ? (
-        <div className="flex justify-center py-16 text-[var(--text-secondary)]">
-          <Spinner />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <GlassCard key={i} className="p-5 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <SkeletonText className="w-2/3" />
+                  <SkeletonText className="w-1/2" />
+                </div>
+                <Skeleton className="h-6 w-12 shrink-0" />
+              </div>
+            </GlassCard>
+          ))}
         </div>
       ) : error ? (
         <GlassCard className="p-6 text-center text-[var(--text-secondary)]">{error}</GlassCard>

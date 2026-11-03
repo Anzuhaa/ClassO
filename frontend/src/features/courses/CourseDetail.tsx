@@ -7,7 +7,7 @@ import { Users, Check } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
 import { getStoredUser } from '../../lib/auth'
 import type { Course, CourseMember, Group } from '../../types'
-import { GlassCard, Spinner } from '../../components/ui'
+import { GlassCard, Skeleton, SkeletonCircle, SkeletonText } from '../../components/ui'
 import { GroupCard } from './GroupCard'
 import { RosterPanel } from './RosterPanel'
 import { CourseHeader } from './CourseHeader'
@@ -224,8 +224,19 @@ export function CourseDetail() {
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <div className="min-w-0">
           {forbidden ? null : loading ? (
-            <div className="flex justify-center py-16 text-[var(--text-secondary)]">
-              <Spinner />
+            <div className="grid gap-4 sm:grid-cols-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <GlassCard key={i} className="p-5 space-y-3">
+                  <SkeletonText className="w-1/3" />
+                  <div className="flex items-center gap-2">
+                    {Array.from({ length: 3 }).map((_, j) => (
+                      <SkeletonCircle key={j} size={28} />
+                    ))}
+                    <SkeletonText className="w-12" />
+                  </div>
+                  <Skeleton className="h-8 w-full" />
+                </GlassCard>
+              ))}
             </div>
           ) : groups.length === 0 ? (
             <GlassCard className="p-10 text-center text-[var(--text-secondary)]">
@@ -257,7 +268,27 @@ export function CourseDetail() {
           )}
         </div>
 
-        {!forbidden && (
+        {!forbidden && loading && (
+          <GlassCard className="h-fit p-4 lg:sticky lg:top-8">
+            <div className="mb-3 flex items-center gap-2">
+              <Skeleton className="h-4 w-4" />
+              <SkeletonText className="w-28" />
+            </div>
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2.5">
+                  <SkeletonCircle size={32} />
+                  <div className="flex-1 space-y-1.5">
+                    <SkeletonText className="w-3/4" />
+                    <SkeletonText className="w-1/2" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
+        )}
+
+        {!forbidden && !loading && (
           <RosterPanel
             members={members}
             userId={userId}

@@ -6,7 +6,7 @@ import { Plus, Lock } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
 import { getStoredUser } from '../../lib/auth'
 import type { Profile, Task, TaskStatus } from '../../types'
-import { GlassCard, Button, Input, TextArea, Label, Spinner } from '../../components/ui'
+import { GlassCard, Button, Input, TextArea, Label, Spinner, Skeleton, SkeletonText } from '../../components/ui'
 import { TaskEditModal } from './TaskEditModal'
 import { TaskCard } from './TaskCard'
 
@@ -118,8 +118,24 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
 
   if (loading) {
     return (
-      <div className="flex justify-center py-16 text-[var(--text-secondary)]">
-        <Spinner />
+      <div className="grid gap-4 md:grid-cols-3">
+        {COLUMNS.map(({ label }) => (
+          <GlassCard key={label} className="p-3">
+            <div className="mb-3 flex items-center gap-2 px-1">
+              <Skeleton className="h-2.5 w-2.5 rounded-full" />
+              <SkeletonText className="w-16" />
+              <Skeleton className="ml-auto h-3 w-5" />
+            </div>
+            <div className="space-y-2">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <GlassCard key={i} className="space-y-2 p-3">
+                  <SkeletonText className="w-full" />
+                  <SkeletonText className="w-2/3" />
+                </GlassCard>
+              ))}
+            </div>
+          </GlassCard>
+        ))}
       </div>
     )
   }

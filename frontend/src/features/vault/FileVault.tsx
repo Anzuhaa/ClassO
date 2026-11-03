@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Upload, FolderOpen, X, Lock } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
 import type { VaultFile } from '../../types'
-import { GlassCard, Button, Spinner } from '../../components/ui'
+import { GlassCard, Button, Spinner, Skeleton, SkeletonText } from '../../components/ui'
 import { FileUploadModal, validateSelection } from './FileUploadModal'
 import { FileDeleteModal } from './FileDeleteModal'
 import { splitName } from './FileNameField'
@@ -179,9 +179,22 @@ export function FileVault({ groupId }: { groupId: string }) {
       {error && <GlassCard className="p-4 text-sm text-red-500">{error}</GlassCard>}
 
       {loading ? (
-        <div className="flex justify-center py-16 text-[var(--text-secondary)]">
-          <Spinner />
-        </div>
+        <GlassCard className="divide-y divide-[var(--border)]">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 p-4">
+              <Skeleton className="h-10 w-10 shrink-0 rounded-lg" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <SkeletonText className="w-1/2" />
+                <SkeletonText className="w-1/3" />
+              </div>
+              <div className="flex gap-1">
+                <Skeleton className="h-8 w-8" />
+                <Skeleton className="h-8 w-8" />
+                <Skeleton className="h-8 w-8" />
+              </div>
+            </div>
+          ))}
+        </GlassCard>
       ) : files.length === 0 ? (
         <GlassCard className={`p-10 text-center text-[var(--text-secondary)] ${nonMember ? 'blur-sm select-none' : ''}`}>
           <FolderOpen size={40} className="mx-auto mb-3 opacity-40" />

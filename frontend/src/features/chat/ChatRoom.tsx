@@ -4,7 +4,7 @@ import { Send, Search, Lock } from 'lucide-react'
 import { api } from '../../lib/api'
 import { getStoredUser } from '../../lib/auth'
 import type { Message, Profile } from '../../types'
-import { GlassCard, Button, Input, Spinner, Avatar } from '../../components/ui'
+import { GlassCard, Button, Input, Avatar, Skeleton, SkeletonCircle, SkeletonText } from '../../components/ui'
 
 export function ChatRoom({ groupId, members }: { groupId: string; members: Profile[] }) {
   const [messages, setMessages] = useState<Message[]>([])
@@ -101,8 +101,21 @@ export function ChatRoom({ groupId, members }: { groupId: string; members: Profi
           style={{ maxHeight: '60vh', minHeight: '320px' }}
         >
           {loading ? (
-            <div className="flex justify-center py-10 text-[var(--text-secondary)]">
-              <Spinner />
+            <div className="space-y-4 py-2">
+              {Array.from({ length: 5 }).map((_, i) => {
+                const mine = i % 2 === 1
+                return (
+                  <div key={i} className={`flex items-start gap-2.5 ${mine ? 'flex-row-reverse' : ''}`}>
+                    <SkeletonCircle size={28} />
+                    <div className={`flex min-w-0 flex-col ${mine ? 'items-end' : ''}`}>
+                      <SkeletonText className="w-24" />
+                      <Skeleton
+                        className={`mt-1 h-10 ${mine ? 'w-48' : 'w-40'}`}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           ) : visible.length === 0 ? (
             <p className="py-10 text-center text-sm text-[var(--text-tertiary)]">

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import type {
   ButtonHTMLAttributes,
+  CSSProperties,
   HTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
@@ -63,7 +64,7 @@ export function Label({ children, text }: { children: ReactNode; text: string })
   )
 }
 
-/** Spinner is a small indeterminate loader. */
+/** Spinner is a small indeterminate loader (for inline button/action progress). */
 export function Spinner({ className = '' }: { className?: string }) {
   return (
     <span
@@ -71,6 +72,35 @@ export function Spinner({ className = '' }: { className?: string }) {
       aria-label="loading"
     />
   )
+}
+
+/** Skeleton is a shimmering placeholder block for content that is still loading.
+ * Use it to mirror the shape of the real UI instead of a bare spinner. */
+export function Skeleton({
+  className = '',
+  style,
+}: {
+  className?: string
+  style?: CSSProperties
+}) {
+  return (
+    <div
+      aria-hidden
+      style={style}
+      className={`animate-shimmer rounded-md bg-[linear-gradient(110deg,var(--surface-strong)_0%,var(--surface)_45%,var(--surface-strong)_90%)] bg-[length:200%_100%] ${className}`}
+    />
+  )
+}
+
+/** SkeletonCircle is a round skeleton for avatar-sized placeholders. */
+export function SkeletonCircle({ size = 32, className = '' }: { size?: number; className?: string }) {
+  return <Skeleton className={`shrink-0 rounded-full ${className}`} style={{ width: size, height: size }} />
+}
+
+/** SkeletonText is a one-line text placeholder; pass a Tailwind width class to
+ * vary its length (e.g. `w-2/3`). */
+export function SkeletonText({ className = '' }: { className?: string }) {
+  return <Skeleton className={`h-3.5 ${className || 'w-full'}`} />
 }
 
 /** Avatar renders a profile picture with an initials fallback when the URL is
