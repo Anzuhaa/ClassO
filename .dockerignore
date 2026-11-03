@@ -1,0 +1,21 @@
+# Secrets — never bake these into the image.
+.env
+**/.env
+**/.env.local
+
+# Version control & editor noise.
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+
+# Build artifacts & dependencies (rebuilt inside the image).
+frontend/node_modules
+frontend/dist
+frontend/.vite
+*.tsbuildinfo
+backend/vault
+
+# Docs kept out of the image.
+*.md

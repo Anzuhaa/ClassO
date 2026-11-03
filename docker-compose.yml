@@ -1,0 +1,20 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        # Public values baked into the SPA at build time (safe to expose).
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+    container_name: classo
+    restart: unless-stopped
+    ports:
+      # nginx serves the SPA + API on 7860 inside the container.
+      - "8080:7860"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+      ALLOW_NO_AUTH: ${ALLOW_NO_AUTH:-false}
+      INSTRUCTOR_EMAILS: ${INSTRUCTOR_EMAILS:-}

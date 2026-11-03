@@ -1,0 +1,13 @@
+{
+  "$schema": "https://www.modelscope.ai/api/v1/studios/deploy_schema.json",
+  "sdk_type": "docker",
+  "resource_configuration": "platform/2v-cpu-16g-mem",
+  "port": 7860,
+  "environment_variables": [
+    { "name": "DATABASE_URL", "value": "YOUR_DATABASE_URL" },
+    { "name": "SUPABASE_URL", "value": "YOUR_SUPABASE_URL" },
+    { "name": "SUPABASE_JWT_SECRET", "value": "YOUR_JWT_SECRET" },
+    { "name": "SUPABASE_SERVICE_KEY", "value": "YOUR_SERVICE_ROLE_KEY" },
+    { "name": "INSTRUCTOR_EMAILS", "value": "" }
+  ]
+}
