@@ -9,10 +9,12 @@ import type {
   FormationResult,
   Group,
   GroupJoinRequest,
+  GroupMemberView,
   Message,
   Profile,
   Task,
   TaskStatus,
+  TypingSignal,
   VaultFile,
 } from '../types'
 import { getAccessToken } from './auth'
@@ -58,7 +60,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   // Profiles
   getMe: () => request<Profile>('/profiles/me'),
-  updateMe: (body: { fullName?: string; role?: 'instructor' | 'student' }) =>
+  updateMe: (body: { fullName?: string }) =>
     request<Profile>('/profiles/me', { method: 'PATCH', body: JSON.stringify(body) }),
   promoteMe: () => request<Profile>('/profiles/me/promote', { method: 'POST' }),
   // Multipart avatar upload (not JSON, so it bypasses the JSON request helper).
@@ -129,7 +131,12 @@ export const api = {
     }),
 
   // Group workspace
-  listMembers: (groupId: string) => request<Profile[]>(`/groups/${groupId}/members`),
+  listMembers: (groupId: string) => request<GroupMemberView[]>(`/groups/${groupId}/members`),
+  setGroupLead: (groupId: string, userId: string) =>
+    request<{ status: string }>(`/groups/${groupId}/lead`, {
+      method: 'PUT',
+      body: JSON.stringify({ userId }),
+    }),
   joinGroup: (groupId: string) =>
     request<{ status: string; groupId: string }>(`/groups/${groupId}/join`, { method: 'POST' }),
   leaveGroup: (groupId: string) =>
@@ -159,6 +166,73 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ content }),
     }),
+  // Emit a "typing" presence ping. Callers throttle this (not every keystroke).
+  sendTyping: (groupId: string) =>
+    request<{ status: string }>(`/groups/${groupId}/typing`, { method: 'POST' }),
+  // Subscribe to the group's message stream (server-sent events). Returns an
+  // abort function so the caller can cancel on unmount. Each pushed message is
+  // delivered to onMessage and each transient typing ping to onTyping; on the
+  // stream ending (or erroring) onEnd fires unless it was aborted.
+  streamMessages: (
+    groupId: string,
+    onMessage: (m: Message) => void,
+    onTyping: (t: TypingSignal) => void,
+    onEnd: () => void,
+  ): (() => void) => {
+    const controller = new AbortController()
+    const token = getAccessToken()
+    const headers: Record<string, string> = { Accept: 'text/event-stream' }
+    if (token) headers.Authorization = `Bearer ${token}`
+
+    void (async () => {
+      try {
+        const res = await fetch(`${BASE}/groups/${groupId}/messages/stream`, {
+          headers,
+          signal: controller.signal,
+        })
+        if (!res.ok || !res.body) {
+          onEnd()
+          return
+        }
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        // Parse SSE frames: events are separated by blank lines; each event
+        // block carries `event:` and `data:` fields. Route "message" events to
+        // onMessage and "typing" events to onTyping.
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          let sep: number
+          while ((sep = buffer.indexOf('\n\n')) >= 0) {
+            const frame = buffer.slice(0, sep)
+            buffer = buffer.slice(sep + 2)
+            let event = 'message'
+            let data = ''
+            for (const line of frame.split('\n')) {
+              if (line.startsWith('event:')) event = line.slice(6).trim()
+              else if (line.startsWith('data:')) data += line.slice(5).trim()
+            }
+            if (!data) continue
+            try {
+              if (event === 'typing') onTyping(JSON.parse(data) as TypingSignal)
+              else if (event === 'message') onMessage(JSON.parse(data) as Message)
+            } catch {
+              /* skip malformed frame */
+            }
+          }
+        }
+        onEnd()
+      } catch {
+        // AbortError on unmount is normal; any other network error ends the
+        // stream (the component reconnects by re-running the effect).
+        if (!controller.signal.aborted) onEnd()
+      }
+    })()
+
+    return () => controller.abort()
+  },
   listTasks: (groupId: string) => request<Task[]>(`/groups/${groupId}/tasks`),
   createTask: (
     groupId: string,

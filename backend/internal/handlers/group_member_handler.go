@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/classo/backend/internal/middleware"
+	"github.com/classo/backend/internal/models"
 	"github.com/classo/backend/internal/repository"
 )
 
@@ -12,13 +13,14 @@ import (
 // leave, remove member, delete) for GroupHandler; the chat/task endpoints stay
 // in group_handler.go.
 
-// Members returns the profiles of everyone in a group. Member or course owner only.
+// Members returns everyone in a group with their group role ("lead"/"member")
+// so the workspace can highlight the lead. Group members only.
 func (h *GroupHandler) Members(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 	if !h.requireGroupMember(w, r, groupID) {
 		return
 	}
-	members, err := h.repo.ListProfilesByGroup(r.Context(), groupID)
+	members, err := h.repo.ListGroupMemberViews(r.Context(), groupID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list members")
 		return
@@ -133,7 +135,7 @@ type renameGroupRequest struct {
 	Name string `json:"name"`
 }
 
-// Get returns a single group by id. Member or course owner only.
+// Get returns a single group by id. Group members only.
 func (h *GroupHandler) Get(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 	if !h.requireGroupMember(w, r, groupID) {
@@ -151,8 +153,9 @@ func (h *GroupHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, group)
 }
 
-// Rename updates a group's name (instructor action). The refreshed group is
-// returned so the workspace header, breadcrumbs, and sidebar can resync.
+// Rename updates a group's name. Allowed for the group's lead or a course
+// instructor. The refreshed group is returned so the workspace header,
+// breadcrumbs, and sidebar can resync.
 func (h *GroupHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 	group, err := h.repo.GetGroup(r.Context(), groupID)
@@ -164,7 +167,7 @@ func (h *GroupHandler) Rename(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load group")
 		return
 	}
-	if !h.requireCourseInstructor(w, r, group.CourseID) {
+	if !h.requireGroupLeadOrInstructor(w, r, group) {
 		return
 	}
 	var req renameGroupRequest
@@ -187,6 +190,62 @@ func (h *GroupHandler) Rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// setLeadRequest identifies the member to promote to group lead.
+type setLeadRequest struct {
+	UserID string `json:"userId"`
+}
+
+// SetLead promotes a group member to "lead" (instructor action). Exactly one
+// lead exists per group: promoting demotes the previous lead, if any.
+func (h *GroupHandler) SetLead(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	group, err := h.repo.GetGroup(r.Context(), groupID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "group not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load group")
+		return
+	}
+	if !h.requireCourseInstructor(w, r, group.CourseID) {
+		return
+	}
+	var req setLeadRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.UserID == "" {
+		writeError(w, http.StatusBadRequest, "userId is required")
+		return
+	}
+	if err := h.repo.SetGroupLead(r.Context(), groupID, req.UserID); err != nil {
+		if err == repository.ErrNotFound {
+			writeError(w, http.StatusNotFound, "membership not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to set lead")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// requireGroupLeadOrInstructor returns true when the current user is the group's
+// lead or a course instructor (owner or courseRole instructor); it writes 403
+// otherwise. It takes the group so callers can fetch it once and reuse it.
+func (h *GroupHandler) requireGroupLeadOrInstructor(w http.ResponseWriter, r *http.Request, group *models.Group) bool {
+	userID := middleware.UserID(r.Context())
+	role, err := h.repo.GetGroupMemberRole(r.Context(), group.ID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check access")
+		return false
+	}
+	if role == models.RoleLead {
+		return true
+	}
+	return h.requireCourseInstructor(w, r, group.CourseID)
 }
 
 // requireCourseInstructor enforces that the current user owns the course or

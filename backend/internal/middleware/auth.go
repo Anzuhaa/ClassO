@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/classo/backend/internal/config"
 	"github.com/classo/backend/internal/models"
@@ -137,9 +138,10 @@ func roleFromClaims(c *jwtClaims) string {
 //   - HS256 (legacy): the signature is HMAC-SHA256 over "header.payload" keyed
 //     with the project's JWT secret (SUPABASE_JWT_SECRET).
 //
-// Expiry is not enforced here (Supabase issues short-lived access tokens and
-// refreshes are handled client-side), but malformed or unverifiable tokens are
-// rejected.
+// Expiry is enforced here: an expired access token is rejected so a leaked
+// token stops working at its natural end even before Supabase revokes it.
+// (Supabase issues short-lived access tokens; refreshes are handled client-side,
+// but the server must not trust a token past its "exp".)
 func verifySupabaseJWT(cfg *config.Config, token string) (sub, email, role string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -203,6 +205,11 @@ func verifySupabaseJWT(cfg *config.Config, token string) (sub, email, role strin
 	}
 	var claims jwtClaims
 	if err := json.Unmarshal(payload, &claims); err != nil || claims.Sub == "" {
+		return "", "", ""
+	}
+	// Reject expired tokens. Missing "exp" is tolerated (some legacy HS256
+	// tokens omit it), but a present and elapsed "exp" is a hard fail.
+	if claims.Exp > 0 && time.Now().Unix() >= claims.Exp {
 		return "", "", ""
 	}
 	return claims.Sub, claims.Email, roleFromClaims(&claims)

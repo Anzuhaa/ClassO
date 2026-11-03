@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/classo/backend/internal/config"
 )
@@ -172,6 +173,46 @@ func TestVerifyHS256Fallback(t *testing.T) {
 	}
 	if email != "legacy@test.com" {
 		t.Fatalf("email = %q, want %q", email, "legacy@test.com")
+	}
+}
+
+// TestVerifyExpiredTokenRejected guards the expiry enforcement: a token with a
+// valid signature but an already-passed "exp" must be rejected.
+func TestVerifyExpiredTokenRejected(t *testing.T) {
+	resetJWKS()
+	url, key, closeFn := newJWKSServer(t, "k1")
+	defer closeFn()
+
+	token := signES256(t, key, "k1", map[string]any{
+		"sub":   "user-123",
+		"email": "user@test.com",
+		"exp":   time.Now().Add(-time.Hour).Unix(),
+	})
+
+	cfg := &config.Config{SupabaseURL: url}
+	sub, _, _ := verifySupabaseJWT(cfg, token)
+	if sub != "" {
+		t.Fatalf("expired token verified with sub=%q; want empty", sub)
+	}
+}
+
+// TestVerifyUnexpiredTokenAccepted guards that a token whose "exp" is still in
+// the future (or, equivalently, a token with no "exp") is accepted.
+func TestVerifyUnexpiredTokenAccepted(t *testing.T) {
+	resetJWKS()
+	url, key, closeFn := newJWKSServer(t, "k1")
+	defer closeFn()
+
+	token := signES256(t, key, "k1", map[string]any{
+		"sub":   "user-123",
+		"email": "user@test.com",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
+
+	cfg := &config.Config{SupabaseURL: url}
+	sub, _, _ := verifySupabaseJWT(cfg, token)
+	if sub != "user-123" {
+		t.Fatalf("unexpired token rejected: sub=%q; want %q", sub, "user-123")
 	}
 }
 

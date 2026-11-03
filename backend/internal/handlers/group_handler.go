@@ -15,11 +15,12 @@ import (
 // lifecycle endpoints live in group_member_handler.go.
 type GroupHandler struct {
 	repo *repository.Repo
+	hub  *ChatHub
 }
 
 // NewGroupHandler wires a GroupHandler with its dependencies.
 func NewGroupHandler(repo *repository.Repo) *GroupHandler {
-	return &GroupHandler{repo: repo}
+	return &GroupHandler{repo: repo, hub: NewChatHub()}
 }
 
 // createMessageRequest is the payload for posting a chat message.
@@ -27,7 +28,7 @@ type createMessageRequest struct {
 	Content string `json:"content"`
 }
 
-// Messages lists recent chat messages for a group. Member or course owner only.
+// Messages lists recent chat messages for a group. Group members only.
 func (h *GroupHandler) Messages(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 	if !h.requireGroupMember(w, r, groupID) {
@@ -66,10 +67,53 @@ func (h *GroupHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to send message")
 		return
 	}
+
+	// Enrich with the sender's display name/avatar so both the REST response and
+	// the SSE broadcast carry everything a client needs to render without a
+	// follow-up fetch.
+	if sender, err := h.repo.GetProfile(r.Context(), userID); err == nil {
+		msg.SenderName = sender.FullName
+		msg.SenderAvatarURL = sender.AvatarURL
+		if sender.Email != "" && msg.SenderName == "" {
+			msg.SenderName = sender.Email
+		}
+	}
+
+	// Fan the new message out to connected subscribers (SSE). Non-blocking.
+	h.hub.PublishMessage(*msg)
+
 	writeJSON(w, http.StatusCreated, msg)
 }
 
-// Tasks lists all tasks in the group's board. Member or course owner only.
+// Typing broadcasts a transient "is typing" presence ping to the group's
+// subscribers. Member only. It is intentionally cheap: no persistence, a tiny
+// payload, and the client is expected to throttle it (a few POSTs per second at
+// most) rather than firing on every keystroke.
+func (h *GroupHandler) Typing(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	if !h.requireGroupMember(w, r, groupID) {
+		return
+	}
+	userID := middleware.UserID(r.Context())
+
+	name := ""
+	if p, err := h.repo.GetProfile(r.Context(), userID); err == nil {
+		name = p.FullName
+		if name == "" {
+			name = p.Email
+		}
+	}
+
+	h.hub.PublishTyping(typingSignal{
+		GroupID: groupID,
+		UserID:  userID,
+		Name:    name,
+		At:      time.Now().UnixMilli(),
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// Tasks lists all tasks in the group's board. Group members only.
 func (h *GroupHandler) Tasks(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 	if !h.requireGroupMember(w, r, groupID) {
@@ -238,8 +282,10 @@ func (h *GroupHandler) validateAssignees(w http.ResponseWriter, r *http.Request,
 	return nil
 }
 
-// requireGroupMember enforces that the current user is a group member or owns
-// the course containing the group, writing 403 otherwise.
+// requireGroupMember enforces that the current user is an actual member of the
+// group, writing 403 otherwise. Group workspace content is private to its
+// members (course owners/instructors are not granted a view unless they are
+// members themselves).
 func (h *GroupHandler) requireGroupMember(w http.ResponseWriter, r *http.Request, groupID string) bool {
 	userID := middleware.UserID(r.Context())
 	ok, err := h.repo.IsGroupMember(r.Context(), groupID, userID)

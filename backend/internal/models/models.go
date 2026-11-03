@@ -53,16 +53,23 @@ type Group struct {
 	// Members is the roster of profiles in this group (display name, username,
 	// avatar), populated for list views so students can see who is in each team
 	// without opening the workspace. It is not a column; it's a joined subquery.
-	Members []Profile `json:"members,omitempty"`
+	Members []GroupMemberView `json:"members,omitempty"`
 }
 
-// GroupMember mirrors group_members; Role is "lead" or "member".
+// GroupMember reflects group_members; Role is "lead" or "member".
 type GroupMember struct {
 	ID       string `json:"id"`
 	GroupID  string `json:"groupId"`
 	CourseID string `json:"courseId"`
 	UserID   string `json:"userId"`
 	Role     string `json:"role"`
+}
+
+// GroupMemberView is a member profile with its per-group role ("lead" or
+// "member"), used to render rosters that need to highlight the team lead.
+type GroupMemberView struct {
+	Profile
+	GroupRole string `json:"groupRole"`
 }
 
 // GroupJoinRequest mirrors group_join_requests: a student's request to move to

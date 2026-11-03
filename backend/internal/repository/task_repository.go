@@ -70,6 +70,35 @@ func (r *Repo) ListTaskAssignees(ctx context.Context, taskID string) ([]models.T
 	return out, rows.Err()
 }
 
+// ListTaskAssigneesForGroup returns every assignee across a group's tasks in a
+// single round-trip, keyed by task id, so ListTasks can attach assignee lists
+// without an N+1 query per task.
+func (r *Repo) ListTaskAssigneesForGroup(ctx context.Context, groupID string) (map[string][]models.TaskAssignee, error) {
+	rows, err := r.Pool.Query(ctx, `
+		SELECT ta.task_id, p.id, COALESCE(p.full_name, '')
+		FROM task_assignees ta
+		JOIN profiles p ON p.id = ta.user_id
+		JOIN tasks t ON t.id = ta.task_id
+		WHERE t.group_id = $1
+		ORDER BY ta.task_id, p.full_name
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string][]models.TaskAssignee)
+	for rows.Next() {
+		var taskID string
+		var a models.TaskAssignee
+		if err := rows.Scan(&taskID, &a.ID, &a.FullName); err != nil {
+			return nil, err
+		}
+		out[taskID] = append(out[taskID], a)
+	}
+	return out, rows.Err()
+}
+
 // CreateTask inserts a task and its assignees atomically, returning the task
 // with its generated id, timestamps, and assignee list.
 func (r *Repo) CreateTask(ctx context.Context, t models.Task) (*models.Task, error) {
@@ -116,7 +145,8 @@ func (r *Repo) CreateTask(ctx context.Context, t models.Task) (*models.Task, err
 }
 
 // ListTasks returns all tasks in a group with their assignee lists, ordered by
-// creation for stable kanban rendering.
+// creation for stable kanban rendering. Assignee lists are batch-loaded once
+// per group to avoid an N+1 query per task.
 func (r *Repo) ListTasks(ctx context.Context, groupID string) ([]models.Task, error) {
 	rows, err := r.Pool.Query(ctx, `
 		SELECT `+taskWithAssignees+`
@@ -129,6 +159,11 @@ func (r *Repo) ListTasks(ctx context.Context, groupID string) ([]models.Task, er
 	}
 	defer rows.Close()
 
+	assigneesByTask, err := r.ListTaskAssigneesForGroup(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+
 	out := make([]models.Task, 0)
 	for rows.Next() {
 		var t models.Task
@@ -136,11 +171,7 @@ func (r *Repo) ListTasks(ctx context.Context, groupID string) ([]models.Task, er
 			&t.Status, &t.DueDate, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt, &t.AssigneeName); err != nil {
 			return nil, err
 		}
-		assignees, err := r.ListTaskAssignees(ctx, t.ID)
-		if err != nil {
-			return nil, err
-		}
-		t.Assignees = assignees
+		t.Assignees = assigneesByTask[t.ID]
 		out = append(out, t)
 	}
 	return out, rows.Err()

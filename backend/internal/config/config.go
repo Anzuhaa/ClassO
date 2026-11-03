@@ -57,6 +57,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("DATABASE_URL is required (Supabase Postgres connection string)")
 	}
 
+	// Safety: ALLOW_NO_AUTH makes the backend trust an unverified X-User-Id
+	// header (full identity spoofing), so it must never be enabled against a
+	// real Supabase project. Refuse to start if both are set, so a forgotten
+	// dev flag can't silently turn production auth off.
+	if cfg.AllowNoAuth && cfg.SupabaseURL != "" {
+		return nil, fmt.Errorf("ALLOW_NO_AUTH=true is incompatible with a configured SUPABASE_URL; it is meant for local development only")
+	}
+
 	return cfg, nil
 }
 

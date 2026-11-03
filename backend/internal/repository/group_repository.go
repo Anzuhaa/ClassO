@@ -130,13 +130,17 @@ func (r *Repo) ListGroups(ctx context.Context, courseID string) ([]models.Group,
 		return nil, err
 	}
 
-	// Attach each group's member roster (names/usernames/avatars).
+	// Attach each group's member roster in a single batched query (no N+1).
+	memberships, err := r.ListGroupMemberProfilesByCourse(ctx, courseID)
+	if err != nil {
+		return nil, err
+	}
+	byGroup := make(map[string][]models.GroupMemberView, len(out))
+	for _, m := range memberships {
+		byGroup[m.GroupID] = append(byGroup[m.GroupID], m.GroupMemberView)
+	}
 	for i := range out {
-		members, err := r.ListProfilesByGroup(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Members = members
+		out[i].Members = byGroup[out[i].ID]
 	}
 	return out, nil
 }

@@ -40,13 +40,17 @@ func (h *ProfileHandler) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 // updateProfileRequest is the payload for updating the current user's profile.
+// Only the display name is editable here; the role is deliberately omitted so a
+// user cannot self-assign "instructor" via PATCH (that would bypass the
+// INSTRUCTOR_EMAILS allowlist enforced in Promote, which is the sole role-
+// escalation path).
 type updateProfileRequest struct {
 	FullName string `json:"fullName"`
-	Role     string `json:"role"`
 }
 
-// Update lets the current user set their display name and role. Email is owned
-// by Supabase Auth and cannot be changed here.
+// Update lets the current user set their display name only. Email is owned by
+// Supabase Auth, and role is owned by the Promote allowlist; neither is
+// mutable here.
 func (h *ProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserID(r.Context())
 	var req updateProfileRequest
@@ -64,17 +68,15 @@ func (h *ProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if fullName == "" {
 		fullName = current.FullName
 	}
-	role := req.Role
-	if role != models.RoleInstructor && role != models.RoleStudent {
-		role = current.Role
-	}
 
+	// Preserve the authoritative role and email exactly as loaded; only the
+	// display name may change through this endpoint.
 	p := models.Profile{
 		ID:        userID,
 		FullName:  fullName,
 		Email:     current.Email,
 		AvatarURL: current.AvatarURL,
-		Role:      role,
+		Role:      current.Role,
 	}
 	if err := h.repo.UpsertProfile(r.Context(), p); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save profile")

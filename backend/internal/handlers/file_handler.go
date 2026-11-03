@@ -100,7 +100,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, record)
 }
 
-// List returns the group's vault files. Member or course owner only.
+// List returns the group's vault files. Group members only.
 func (h *FileHandler) List(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 	if !h.requireGroupMember(w, r, groupID) {
@@ -119,7 +119,7 @@ type renameFileRequest struct {
 	Name string `json:"name"`
 }
 
-// Rename updates a file's display name. Member or course owner only.
+// Rename updates a file's display name. Group members only.
 func (h *FileHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	fileID := r.PathValue("fileId")
 	record, err := h.repo.GetFile(r.Context(), fileID)
@@ -195,7 +195,7 @@ func (h *FileHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // URL returns a short-lived backend download URL for a single file so the
 // frontend can preview (images/PDFs/text) or trigger a download. The URL is
 // proxied through /download to keep the private vault bucket's bytes off a
-// public Supabase URL. Member or course owner only.
+// public Supabase URL. Group members only.
 func (h *FileHandler) URL(w http.ResponseWriter, r *http.Request) {
 	fileID := r.PathValue("fileId")
 	record, err := h.repo.GetFile(r.Context(), fileID)
@@ -240,14 +240,19 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, mime, err := h.storage.Download(r.Context(), record.StoragePath)
+	// Open a stream to the storage object; do not buffer the whole file in
+	// memory (files can be up to 20 MiB and many may be requested at once).
+	body, mime, contentLength, err := h.storage.Download(r.Context(), record.StoragePath)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to fetch file: "+err.Error())
 		return
 	}
+	defer body.Close()
 
 	w.Header().Set("Content-Type", firstNonEmpty(mime, "application/octet-stream"))
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if contentLength > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
+	}
 	// Inline preview for images/PDFs/text; attachment for the rest so the
 	// browser offers a download rather than rendering arbitrary bytes.
 	if isPreviewable(mime) {
@@ -256,7 +261,10 @@ func (h *FileHandler) Download(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", "attachment; filename=\""+sanitizeName(record.Name)+"\"")
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	if _, err := io.Copy(w, body); err != nil {
+		// The client may have disconnected mid-stream; nothing to send back here.
+		fmt.Printf("Download: stream failed for %s: %v\n", record.StoragePath, err)
+	}
 }
 
 // isPreviewable reports whether a MIME type should render inline in the browser.
@@ -276,8 +284,10 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// requireGroupMember enforces that the current user is a group member or owns
-// the course containing the group, writing 403 otherwise.
+// requireGroupMember enforces that the current user is an actual member of the
+// group, writing 403 otherwise. Group vault files are private to the group's
+// members (course owners/instructors are not granted a view unless they are
+// members themselves).
 func (h *FileHandler) requireGroupMember(w http.ResponseWriter, r *http.Request, groupID string) bool {
 	userID := middleware.UserID(r.Context())
 	ok, err := h.repo.IsGroupMember(r.Context(), groupID, userID)
@@ -388,37 +398,35 @@ func escapeObjectPath(objectKey string) string {
 	return strings.Join(segs, "/")
 }
 
-// Download fetches a vault object's bytes from the private bucket using the
-// service-role key, returning the data and its MIME type.
-func (s *StorageClient) Download(ctx context.Context, path string) ([]byte, string, error) {
+// Download opens a stream to a vault object from the private bucket using the
+// service-role key, returning the response body (the caller owns closing it)
+// and the object's MIME type and Content-Length. The caller streams to the
+// client with io.Copy so large files never buffer fully in memory.
+func (s *StorageClient) Download(ctx context.Context, path string) (io.ReadCloser, string, int64, error) {
 	if s.baseURL == "" || s.serviceKey == "" {
-		return nil, "", fmt.Errorf("storage not configured")
+		return nil, "", 0, fmt.Errorf("storage not configured")
 	}
 
 	objectPath := strings.TrimPrefix(path, storageBucket+"/")
 	u := fmt.Sprintf("%s/storage/v1/object/authenticated/%s/%s", s.baseURL, storageBucket, escapeObjectPath(objectPath))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, "", fmt.Errorf("storage download failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		resp.Body.Close()
+		return nil, "", 0, fmt.Errorf("storage download failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", err
-	}
-	return data, resp.Header.Get("Content-Type"), nil
+	return resp.Body, resp.Header.Get("Content-Type"), resp.ContentLength, nil
 }
 
 // Delete removes a vault object from the private bucket by its storage path

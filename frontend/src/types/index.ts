@@ -9,6 +9,12 @@ export interface Profile {
   createdAt: string
 }
 
+// GroupMemberView is a profile joined with its per-group role, returned by the
+// group members endpoint so the workspace can highlight the team lead.
+export interface GroupMemberView extends Profile {
+  groupRole: 'lead' | 'member'
+}
+
 export interface Course {
   id: string
   name: string
@@ -39,7 +45,7 @@ export interface Group {
   capacity: number
   createdAt: string
   memberCount?: number
-  members?: Profile[]
+  members?: GroupMemberView[]
 }
 
 export interface Message {
@@ -50,6 +56,15 @@ export interface Message {
   createdAt: string
   senderName?: string
   senderAvatarUrl?: string
+}
+
+// TypingSignal is a transient "is typing" presence ping pushed over the chat
+// SSE stream. It is ephemeral and never persisted.
+export interface TypingSignal {
+  groupId: string
+  userId: string
+  name: string
+  at: number
 }
 
 export interface VaultFile {

@@ -66,16 +66,57 @@ func (r *Repo) JoinGroup(ctx context.Context, groupID, courseID, userID string) 
 	return err
 }
 
-// IsGroupMember reports whether the user belongs to the group, or owns the
-// course that contains the group (so instructors can also view group content).
+// GetGroupMemberRole returns the group role ("lead" or "member") for a user in
+// a group, or "" when they do not belong to it.
+func (r *Repo) GetGroupMemberRole(ctx context.Context, groupID, userID string) (string, error) {
+	var role string
+	err := r.Pool.QueryRow(ctx, `
+		SELECT role FROM group_members WHERE group_id = $1 AND user_id = $2
+	`, groupID, userID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return role, err
+}
+
+// SetGroupLead promotes the named member to "lead" and demotes any existing
+// lead, atomically, so there is always at most one lead per group. It returns
+// ErrNotFound when the target is not a member of the group.
+func (r *Repo) SetGroupLead(ctx context.Context, groupID, userID string) error {
+	return r.tx(ctx, func(tx pgx.Tx) error {
+		demote, err := tx.Exec(ctx, `
+			UPDATE group_members SET role = $2 WHERE group_id = $1 AND role = $3
+		`, groupID, models.RoleMember, models.RoleLead)
+		if err != nil {
+			return err
+		}
+		promote, err := tx.Exec(ctx, `
+			UPDATE group_members SET role = $2 WHERE group_id = $1 AND user_id = $3
+		`, groupID, models.RoleLead, userID)
+		if err != nil {
+			return err
+		}
+		_ = demote
+		if promote.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
+// IsGroupMember reports whether the user belongs to the group as an actual
+// member. A group's private workspace content (chat, tasks, files) is visible
+// only to its members — course owners and instructors get no view here unless
+// they are themselves members, so a group with zero members and one with many
+// are both "locked" to everyone outside it. Instructor management actions
+// (create/delete/rename/remove member) are gated separately by
+// IsCourseInstructor and are unaffected.
 func (r *Repo) IsGroupMember(ctx context.Context, groupID, userID string) (bool, error) {
 	var exists bool
 	err := r.Pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM group_members gm
-			JOIN groups g ON g.id = gm.group_id
-			JOIN courses c ON c.id = g.course_id
-			WHERE gm.group_id = $1 AND (gm.user_id = $2 OR c.owner_id = $2)
+			WHERE gm.group_id = $1 AND gm.user_id = $2
 		)
 	`, groupID, userID).Scan(&exists)
 	return exists, err

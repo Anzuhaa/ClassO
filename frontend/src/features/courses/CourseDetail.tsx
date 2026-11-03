@@ -174,6 +174,26 @@ export function CourseDetail() {
     }
   }
 
+  const renameGroup = async (groupId: string, name: string) => {
+    setError('')
+    try {
+      await api.renameGroup(groupId, name)
+      await load()
+    } catch (e) {
+      throw e
+    }
+  }
+
+  const setGroupLead = async (groupId: string, userId: string) => {
+    setError('')
+    try {
+      await api.setGroupLead(groupId, userId)
+      await load()
+    } catch (e) {
+      throw e
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* ---- Course header ---- */}
@@ -262,6 +282,8 @@ export function CourseDetail() {
                   onJoin={() => joinGroup(g)}
                   onLeave={() => setConfirmLeave(true)}
                   onDelete={() => deleteGroup(g)}
+                  onRename={renameGroup}
+                  onSetLead={setGroupLead}
                 />
               ))}
             </div>

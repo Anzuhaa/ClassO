@@ -195,6 +195,68 @@ func (r *Repo) ListProfilesByGroup(ctx context.Context, groupID string) ([]model
 	return out, rows.Err()
 }
 
+// ListGroupMemberViews returns each profile in a group with its group role,
+// ordered with the lead first, then by name.
+func (r *Repo) ListGroupMemberViews(ctx context.Context, groupID string) ([]models.GroupMemberView, error) {
+	rows, err := r.Pool.Query(ctx, `
+		SELECT p.id, p.full_name, p.email, COALESCE(p.avatar_url, ''), COALESCE(p.role, 'student'), p.created_at, gm.role
+		FROM group_members gm
+		JOIN profiles p ON p.id = gm.user_id
+		WHERE gm.group_id = $1
+		ORDER BY (gm.role = 'lead') DESC, p.full_name
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.GroupMemberView, 0)
+	for rows.Next() {
+		var v models.GroupMemberView
+		if err := rows.Scan(&v.ID, &v.FullName, &v.Email, &v.AvatarURL, &v.Role, &v.CreatedAt, &v.GroupRole); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// GroupMemberProfile is a profile plus the group id it belongs to and the
+// member's group role, used to batch-load the rosters of every group in a
+// course in a single query.
+type GroupMemberProfile struct {
+	GroupID string
+	models.GroupMemberView
+}
+
+// ListGroupMemberProfilesByCourse returns every group member's profile across a
+// course, tagged with their group id and group role, in one round-trip. The
+// caller partitions by GroupID to reconstruct each group's roster without an
+// N+1 query per group.
+func (r *Repo) ListGroupMemberProfilesByCourse(ctx context.Context, courseID string) ([]GroupMemberProfile, error) {
+	rows, err := r.Pool.Query(ctx, `
+		SELECT gm.group_id, p.id, p.full_name, p.email, COALESCE(p.avatar_url, ''), COALESCE(p.role, 'student'), p.created_at, gm.role
+		FROM group_members gm
+		JOIN profiles p ON p.id = gm.user_id
+		WHERE gm.course_id = $1
+		ORDER BY gm.group_id, (gm.role = 'lead') DESC, p.full_name
+	`, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]GroupMemberProfile, 0)
+	for rows.Next() {
+		var e GroupMemberProfile
+		if err := rows.Scan(&e.GroupID, &e.ID, &e.FullName, &e.Email, &e.AvatarURL, &e.Role, &e.CreatedAt, &e.GroupRole); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // ListProfiles returns all profiles (limited utility; used by admin/demo only).
 func (r *Repo) ListProfiles(ctx context.Context) ([]models.Profile, error) {
 	rows, err := r.Pool.Query(ctx, `
