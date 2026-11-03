@@ -37,7 +37,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     'Content-Type': 'application/json',
     ...(init?.headers as Record<string, string> | undefined),
   }
-  if (token) headers.Authorization = `Bearer ${token}`
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+    // Custom fallback header: some gateways (e.g. ModelScope) strip or replace
+    // Authorization, so also send the token as X-Access-Token for the backend to
+    // read as a fallback.
+    headers['X-Access-Token'] = token
+  }
 
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
 
@@ -69,7 +75,10 @@ export const api = {
     form.append('file', file)
     const token = getAccessToken()
     const headers: Record<string, string> = {}
-    if (token) headers.Authorization = `Bearer ${token}`
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+      headers['X-Access-Token'] = token
+    }
     const res = await fetch(`${BASE}/profiles/me/avatar`, {
       method: 'POST',
       headers,
@@ -266,7 +275,10 @@ export const api = {
     if (name) form.append('name', name)
     const token = getAccessToken()
     const headers: Record<string, string> = {}
-    if (token) headers.Authorization = `Bearer ${token}`
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+      headers['X-Access-Token'] = token
+    }
     const res = await fetch(`${BASE}/groups/${groupId}/files`, {
       method: 'POST',
       headers,

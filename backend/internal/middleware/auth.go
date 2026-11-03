@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -74,9 +75,20 @@ func isTokenAuthedDownload(r *http.Request) bool {
 
 // resolveIdentity returns the authenticated user id from the request, or "".
 func resolveIdentity(cfg *config.Config, repo *repository.Repo, r *http.Request) string {
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token := strings.TrimPrefix(authHeader, "Bearer ")
+	token := ""
+	// ModelScope's gateway may strip the Authorization header; accept the token
+	// from a custom header as a fallback so a proxied browser request still verifies.
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	} else if xt := r.Header.Get("X-Access-Token"); xt != "" {
+		token = xt
+	}
+
+	// Temporary diagnostic: report whether auth material arrived at all, without
+	// ever logging the token value itself. Remove this once auth is confirmed.
+	log.Printf("[auth] path=%s authLen=%d xAccessTokenLen=%d", r.URL.Path, len(token), len(r.Header.Get("X-Access-Token")))
+
+	if token != "" {
 		if sub, email, role := verifySupabaseJWT(cfg, token); sub != "" {
 			ensureProfile(cfg, repo, r, sub, email, role)
 			return sub
@@ -274,7 +286,7 @@ func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Access-Token, X-User-Id")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
