@@ -16,6 +16,7 @@ export interface Course {
   joinCode: string
   joinCodeExpiresAt?: string
   ownerId: string
+  locked: boolean
   createdAt: string
   updatedAt: string
 }
@@ -38,6 +39,7 @@ export interface Group {
   capacity: number
   createdAt: string
   memberCount?: number
+  members?: Profile[]
 }
 
 export interface Message {
@@ -87,4 +89,18 @@ export interface Task {
 export interface FormationResult {
   courseId: string
   groups: Group[]
+}
+
+// GroupJoinRequest is a student's pending request to switch groups (or leave)
+// while a course is locked, awaiting instructor approval.
+export interface GroupJoinRequest {
+  id: string
+  courseId: string
+  groupId?: string
+  userId: string
+  status: 'pending' | 'approved' | 'rejected'
+  createdAt: string
+  resolvedAt?: string
+  userName?: string
+  targetGroupName?: string
 }

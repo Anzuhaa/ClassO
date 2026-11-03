@@ -1,15 +1,19 @@
 // GroupCard: a single group's card in the course detail view, with join, leave
-// (students), and delete (instructors) actions plus capacity/duplicate UI hints.
-import { Check, LogIn, LogOut, Trash2 } from 'lucide-react'
+// (students), and delete (instructors) actions, plus a read-only member roster
+// so students can see who is in every team without entering the workspace.
+// When the course is locked, a student's join/leave becomes an approval request.
+import { Check, LogIn, LogOut, Trash2, Lock } from 'lucide-react'
 import type { Group } from '../../types'
-import { GlassCard, Button, Spinner } from '../../components/ui'
+import { GlassCard, Button, Spinner, Avatar } from '../../components/ui'
 
 export function GroupCard({
   group,
   index,
   myGroupId,
   isInstructor,
+  locked,
   joining,
+  pendingRequest,
   onOpen,
   onJoin,
   onLeave,
@@ -19,7 +23,9 @@ export function GroupCard({
   index: number
   myGroupId: string
   isInstructor: boolean
+  locked: boolean
   joining: string | null
+  pendingRequest: boolean
   onOpen: () => void
   onJoin: () => void
   onLeave: () => void
@@ -28,6 +34,7 @@ export function GroupCard({
   const full = (group.memberCount ?? 0) >= group.capacity
   const alreadyInThis = myGroupId === group.id
   const alreadyElsewhere = myGroupId !== '' && myGroupId !== group.id
+  const members = group.members ?? []
 
   return (
     <GlassCard className="p-5">
@@ -41,6 +48,20 @@ export function GroupCard({
       <p className="mt-2 text-sm text-[var(--text-secondary)]">
         {group.memberCount ?? 0}/{group.capacity} members
       </p>
+
+      {/* Read-only roster: every group's members, transparently visible. */}
+      {members.length > 0 && (
+        <ul className="mt-3 space-y-1.5">
+          {members.map((m) => (
+            <li key={m.id} className="flex items-center gap-2 text-xs">
+              <Avatar name={m.fullName || m.email || '?'} src={m.avatarUrl} size={20} />
+              <span className="truncate text-[var(--text-secondary)]">
+                {m.fullName || m.email}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <div className="mt-4 flex items-center justify-between">
         <button
@@ -69,8 +90,13 @@ export function GroupCard({
               onClick={onLeave}
             >
               <LogOut size={13} />
-              Leave Group
+              {locked ? 'Request to Leave' : 'Leave Group'}
             </button>
+          </span>
+        ) : pendingRequest ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+            <Lock size={13} />
+            Request pending
           </span>
         ) : (
           <Button
@@ -79,18 +105,18 @@ export function GroupCard({
             disabled={!!joining || full || alreadyElsewhere}
             onClick={onJoin}
           >
-            {joining === group.id ? <Spinner /> : <LogIn size={14} />}
-            Join Group
+            {joining === group.id ? <Spinner /> : locked ? <Lock size={14} /> : <LogIn size={14} />}
+            {locked ? 'Request Join' : 'Join Group'}
           </Button>
         )}
       </div>
 
-      {full && !alreadyInThis && (
+      {full && !alreadyInThis && !pendingRequest && (
         <p className="mt-2 text-xs text-[var(--text-tertiary)]">Group is full.</p>
       )}
-      {alreadyElsewhere && (
+      {alreadyElsewhere && !pendingRequest && (
         <p className="mt-2 text-xs text-[var(--text-tertiary)]">
-          You are already in another group.
+          Leave your current group before joining another.
         </p>
       )}
     </GlassCard>

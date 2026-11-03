@@ -1,7 +1,8 @@
 // InstructorControls: the join-code card (copy/regen/expire) with an activity
-// status badge, random-assign toolbar, and the manual group-creation form.
+// status badge, a group-membership lock toggle, random-assign toolbar, and the
+// manual group-creation form.
 import { useState } from 'react'
-import { Copy, Check, RefreshCw, CircleSlash, Shuffle, Plus } from 'lucide-react'
+import { Copy, Check, RefreshCw, CircleSlash, Shuffle, Plus, Lock, Unlock } from 'lucide-react'
 import type { Course } from '../../types'
 import { GlassCard, Button, Input, Label, Spinner } from '../../components/ui'
 
@@ -20,6 +21,7 @@ export function InstructorControls({
   onRegenerate,
   onExpire,
   onCreateGroups,
+  onToggleLock,
 }: {
   course: Course
   assigning: boolean
@@ -29,6 +31,7 @@ export function InstructorControls({
   onRegenerate: () => void
   onExpire: () => void
   onCreateGroups: (name: string, capacity: number, count: number) => void
+  onToggleLock: () => void
 }) {
   const [copied, setCopied] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -82,6 +85,26 @@ export function InstructorControls({
         <Button variant="ghost" onClick={onExpire} className="px-2" aria-label="Expire join code">
           <CircleSlash size={16} />
           Expire
+        </Button>
+      </GlassCard>
+
+      <GlassCard className="flex flex-wrap items-center gap-3 p-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+          Group changes
+        </span>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+            course.locked
+              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+              : 'bg-green-500/15 text-green-600 dark:text-green-400'
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${course.locked ? 'bg-amber-500' : 'bg-green-500'}`} />
+          {course.locked ? 'Locked — approval required' : 'Open — students choose freely'}
+        </span>
+        <Button variant="ghost" onClick={onToggleLock} className="px-2" aria-label="Toggle group lock">
+          {course.locked ? <Lock size={16} /> : <Unlock size={16} />}
+          {course.locked ? 'Unlock' : 'Lock'}
         </Button>
       </GlassCard>
 

@@ -35,11 +35,11 @@ func generateJoinCode() (string, error) {
 
 // courseColumns lists the SELECT columns shared by the course query methods so
 // they stay in sync with the model's scan order.
-const courseColumns = "id, name, COALESCE(code, ''), join_code, join_code_expires_at, owner_id, created_at, updated_at"
+const courseColumns = "id, name, COALESCE(code, ''), join_code, join_code_expires_at, owner_id, locked, created_at, updated_at"
 
 func scanCourse(row pgx.Row) (*models.Course, error) {
 	var c models.Course
-	err := row.Scan(&c.ID, &c.Name, &c.Code, &c.JoinCode, &c.JoinCodeExpiresAt, &c.OwnerID, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.Name, &c.Code, &c.JoinCode, &c.JoinCodeExpiresAt, &c.OwnerID, &c.Locked, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (r *Repo) CreateCourse(ctx context.Context, c models.Course) (*models.Cours
 			c.Name, c.Code, code, c.OwnerID)
 
 		var out models.Course
-		if err := row.Scan(&out.ID, &out.Name, &out.Code, &out.JoinCode, &out.JoinCodeExpiresAt, &out.OwnerID, &out.CreatedAt, &out.UpdatedAt); err != nil {
+		if err := row.Scan(&out.ID, &out.Name, &out.Code, &out.JoinCode, &out.JoinCodeExpiresAt, &out.OwnerID, &out.Locked, &out.CreatedAt, &out.UpdatedAt); err != nil {
 			// Retry only on a join_code uniqueness collision.
 			if isUniqueViolation(err) {
 				continue
@@ -107,7 +107,7 @@ func (r *Repo) GetCourseByJoinCode(ctx context.Context, joinCode string) (*model
 // enrolled), used to populate the home dashboard.
 func (r *Repo) ListCourses(ctx context.Context, userID string) ([]models.Course, error) {
 	rows, err := r.Pool.Query(ctx, `
-		SELECT DISTINCT c.id, c.name, COALESCE(c.code, ''), c.join_code, c.join_code_expires_at, c.owner_id, c.created_at, c.updated_at
+		SELECT DISTINCT c.id, c.name, COALESCE(c.code, ''), c.join_code, c.join_code_expires_at, c.owner_id, c.locked, c.created_at, c.updated_at
 		FROM courses c
 		LEFT JOIN course_members cm ON cm.course_id = c.id
 		WHERE c.owner_id = $1 OR cm.user_id = $1
@@ -121,7 +121,7 @@ func (r *Repo) ListCourses(ctx context.Context, userID string) ([]models.Course,
 	out := make([]models.Course, 0)
 	for rows.Next() {
 		var c models.Course
-		if err := rows.Scan(&c.ID, &c.Name, &c.Code, &c.JoinCode, &c.JoinCodeExpiresAt, &c.OwnerID, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Code, &c.JoinCode, &c.JoinCodeExpiresAt, &c.OwnerID, &c.Locked, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

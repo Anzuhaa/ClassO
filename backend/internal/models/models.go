@@ -24,6 +24,7 @@ type Course struct {
 	JoinCode         string     `json:"joinCode"`
 	JoinCodeExpiresAt *time.Time `json:"joinCodeExpiresAt,omitempty"`
 	OwnerID          string     `json:"ownerId"`
+	Locked           bool       `json:"locked"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	UpdatedAt        time.Time  `json:"updatedAt"`
 }
@@ -48,6 +49,11 @@ type Group struct {
 	// so the UI can disable "Join Group" when the group is full. It is not a
 	// column; it's computed with a COUNT/JOIN.
 	MemberCount int `json:"memberCount,omitempty"`
+
+	// Members is the roster of profiles in this group (display name, username,
+	// avatar), populated for list views so students can see who is in each team
+	// without opening the workspace. It is not a column; it's a joined subquery.
+	Members []Profile `json:"members,omitempty"`
 }
 
 // GroupMember mirrors group_members; Role is "lead" or "member".
@@ -57,6 +63,24 @@ type GroupMember struct {
 	CourseID string `json:"courseId"`
 	UserID   string `json:"userId"`
 	Role     string `json:"role"`
+}
+
+// GroupJoinRequest mirrors group_join_requests: a student's request to move to
+// a different group (or leave, when GroupID is nil) while the course is locked,
+// awaiting instructor approval.
+type GroupJoinRequest struct {
+	ID         string     `json:"id"`
+	CourseID   string     `json:"courseId"`
+	GroupID    *string    `json:"groupId"`
+	UserID     string     `json:"userId"`
+	Status     string     `json:"status"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ResolvedAt *time.Time `json:"resolvedAt,omitempty"`
+
+	// UserName and TargetGroupName are denormalized join fields for the
+	// instructor's approval list, not columns.
+	UserName        string `json:"userName,omitempty"`
+	TargetGroupName string `json:"targetGroupName,omitempty"`
 }
 
 // Message mirrors the messages table.

@@ -324,5 +324,15 @@ create policy "tasks_delete_lead" on public.tasks
     )
   );
 
--- Realtime: enable so the chat room receives live message inserts.
-alter publication supabase_realtime add table public.messages;
+-- Realtime: enable so the chat room receives live message inserts. Guarded so
+-- re-running the migration suite (an already-added table) is a no-op.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'messages'
+  ) then
+    alter publication supabase_realtime add table public.messages;
+  end if;
+end
+$$;

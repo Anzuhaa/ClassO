@@ -8,7 +8,10 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 // Config holds every setting the backend needs at runtime.
@@ -33,7 +36,12 @@ type Config struct {
 }
 
 // Load reads configuration from environment variables and applies defaults.
+// It first loads any .env file from a set of candidate locations so the server
+// can be started with a bare `go run ./cmd/server` from either the repository
+// root or the backend/ directory without manually exporting the file.
 func Load() (*Config, error) {
+	loadDotEnv()
+
 	cfg := &Config{
 		Port:               env("PORT", "8080"),
 		DatabaseURL:        env("DATABASE_URL", ""),
@@ -50,6 +58,22 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// loadDotEnv loads a .env file without failing when none exists. It searches
+// ../.env (run from backend/) then ./.env (run from the repository root), so a
+// single `.env` at the project root works regardless of the working directory.
+func loadDotEnv() {
+	candidates := []string{"../.env", ".env", "backend/.env"}
+	for _, path := range candidates {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		// godotenv.Load returns the parsed map even on a read error; ignore both
+		// and rely on the real environment when no file is present.
+		_ = godotenv.Load(abs)
+	}
 }
 
 // env returns the value of key, or fallback when the variable is unset or empty.

@@ -75,6 +75,10 @@ func main() {
 	mux.HandleFunc("DELETE /v1/courses/{id}/members", courseHandler.RemoveMember)
 	mux.HandleFunc("GET /v1/courses/{id}/my-group", courseHandler.MyGroup)
 	mux.HandleFunc("POST /v1/courses/{id}/members", courseHandler.AddMember)
+	mux.HandleFunc("POST /v1/courses/{id}/lock", courseHandler.SetLock)
+	mux.HandleFunc("GET /v1/courses/{id}/join-requests", groupHandler.ListJoinRequests)
+	mux.HandleFunc("POST /v1/courses/{id}/join-requests/{requestId}/approve", groupHandler.ApproveJoinRequest)
+	mux.HandleFunc("POST /v1/courses/{id}/join-requests/{requestId}/reject", groupHandler.RejectJoinRequest)
 
 	// Group workspace.
 	mux.HandleFunc("GET /v1/groups/{id}/members", groupHandler.Members)

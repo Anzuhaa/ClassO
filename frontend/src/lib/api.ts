@@ -8,6 +8,7 @@ import type {
   CourseMember,
   FormationResult,
   Group,
+  GroupJoinRequest,
   Message,
   Profile,
   Task,
@@ -98,6 +99,11 @@ export const api = {
     request<Course>(`/courses/${courseId}/join-code`, { method: 'POST' }),
   expireJoinCode: (courseId: string) =>
     request<Course>(`/courses/${courseId}/join-code`, { method: 'DELETE' }),
+  setCourseLock: (courseId: string, locked: boolean) =>
+    request<Course>(`/courses/${courseId}/lock`, {
+      method: 'POST',
+      body: JSON.stringify({ locked }),
+    }),
   randomAssign: (courseId: string, capacity: number) =>
     request<FormationResult>(`/courses/${courseId}/random-assign`, {
       method: 'POST',
@@ -128,6 +134,12 @@ export const api = {
     request<{ status: string; groupId: string }>(`/groups/${groupId}/join`, { method: 'POST' }),
   leaveGroup: (groupId: string) =>
     request<{ status: string }>(`/groups/${groupId}/leave`, { method: 'POST' }),
+  listJoinRequests: (courseId: string) =>
+    request<GroupJoinRequest[]>(`/courses/${courseId}/join-requests`),
+  approveJoinRequest: (courseId: string, requestId: string) =>
+    request<GroupJoinRequest>(`/courses/${courseId}/join-requests/${requestId}/approve`, { method: 'POST' }),
+  rejectJoinRequest: (courseId: string, requestId: string) =>
+    request<GroupJoinRequest>(`/courses/${courseId}/join-requests/${requestId}/reject`, { method: 'POST' }),
   removeGroupMember: (groupId: string, userId: string) =>
     request<{ status: string }>(`/groups/${groupId}/members`, {
       method: 'DELETE',

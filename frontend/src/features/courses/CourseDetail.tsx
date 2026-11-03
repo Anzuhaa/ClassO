@@ -3,15 +3,18 @@
 // InstructorControls.tsx; group cards in GroupCard.tsx; roster in RosterPanel.tsx.
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Users, Check } from 'lucide-react'
+import { Users, Check } from 'lucide-react'
 import { api, ApiError } from '../../lib/api'
 import { getStoredUser } from '../../lib/auth'
 import type { Course, CourseMember, Group } from '../../types'
 import { GlassCard, Spinner } from '../../components/ui'
 import { GroupCard } from './GroupCard'
 import { RosterPanel } from './RosterPanel'
-import { InstructorControls, joinCodeActive } from './InstructorControls'
+import { CourseHeader } from './CourseHeader'
 import { LeaveGroupModal } from './LeaveGroupModal'
+import { JoinRequestsPanel } from './JoinRequestsPanel'
+import { useJoinRequests } from './useJoinRequests'
+import { useInstructorActions } from './useInstructorActions'
 
 export function CourseDetail() {
   const { courseId = '' } = useParams()
@@ -31,6 +34,14 @@ export function CourseDetail() {
   const [leavingGroup, setLeavingGroup] = useState(false)
 
   const userId = getStoredUser()?.id ?? ''
+
+  const {
+    requests,
+    pendingRequestGroupId,
+    resolving,
+    refresh: refreshRequests,
+    resolve,
+  } = useJoinRequests(courseId, userId)
 
   // Tick to flip the join-code badge live as expiry is reached/cleared.
   const [, setNow] = useState(() => Date.now())
@@ -54,6 +65,11 @@ export function CourseDetail() {
       setGroups(gs ?? [])
       setMembers(ms ?? [])
       setMyGroupId(my?.groupId ?? '')
+
+      // Instructors load the approval queue; students learn whether they have a
+      // pending request (its target group drives the card's "request pending" UI).
+      const isInst = c.ownerId === userId || ms?.some((m) => m.id === userId && m.courseRole === 'instructor')
+      await refreshRequests(isInst)
     } catch (e) {
       if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
         setForbidden(true)
@@ -63,7 +79,7 @@ export function CourseDetail() {
     } finally {
       setLoading(false)
     }
-  }, [courseId])
+  }, [courseId, userId, refreshRequests])
 
   useEffect(() => {
     void load()
@@ -73,57 +89,12 @@ export function CourseDetail() {
     !!course &&
     (course.ownerId === userId || members.some((m) => m.id === userId && m.courseRole === 'instructor'))
 
-  const runRandomAssign = async () => {
-    setError('')
-    setMessage('')
-    // Confirm before resetting an existing distribution.
-    const willReset = groups.length > 0 || groups.some((g) => (g.memberCount ?? 0) > 0)
-    if (willReset && !window.confirm('Running random assignment will reset existing group memberships for this course. Do you want to proceed?')) {
-      return
-    }
-    setAssigning(true)
-    try {
-      const result = await api.randomAssign(courseId, assignCapacity)
-      setMessage(`Randomly formed ${result.groups.length} groups.`)
-      await load()
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to form groups')
-    } finally {
-      setAssigning(false)
-    }
-  }
-
-  const createGroups = async (name: string, capacity: number, count: number) => {
-    setError('')
-    setMessage('')
-    try {
-      const created = await api.createGroups(courseId, { name, capacity, count })
-      setMessage(`Created ${created.length} group(s).`)
-      await load()
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to create groups')
-    }
-  }
-
-  const regenerateCode = async () => {
-    setError('')
-    try {
-      setCourse(await api.regenerateJoinCode(courseId))
-      setMessage('Join code regenerated.')
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to regenerate join code')
-    }
-  }
-
-  const expireCode = async () => {
-    setError('')
-    try {
-      setCourse(await api.expireJoinCode(courseId))
-      setMessage('Join code expired.')
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to expire join code')
-    }
-  }
+  const { runRandomAssign, createGroups, regenerateCode, expireCode } = useInstructorActions(
+    courseId,
+    groups,
+    assignCapacity,
+    { setError, setMessage, setAssigning, setCourse, reload: load },
+  )
 
   const joinGroup = async (group: Group) => {
     setJoining(group.id)
@@ -131,7 +102,9 @@ export function CourseDetail() {
     setMessage('')
     try {
       await api.joinGroup(group.id)
-      setMessage(`Joined ${group.name}.`)
+      // If the course is locked the join became a pending request rather than an
+      // immediate move; still reload so the card reflects the new state.
+      setMessage(course?.locked ? `Requested to join ${group.name}. Awaiting instructor approval.` : `Joined ${group.name}.`)
       await load()
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to join group')
@@ -145,13 +118,37 @@ export function CourseDetail() {
     setLeavingGroup(true)
     try {
       await api.leaveGroup(myGroupId)
-      setMessage('Left the group.')
+      setMessage(course?.locked ? 'Request to leave sent. Awaiting instructor approval.' : 'Left the group.')
       setConfirmLeave(false)
       await load()
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to leave group')
     } finally {
       setLeavingGroup(false)
+    }
+  }
+
+  const toggleLock = async () => {
+    if (!course) return
+    setError('')
+    setMessage('')
+    try {
+      setCourse(await api.setCourseLock(courseId, !course.locked))
+      setMessage(!course.locked ? 'Group changes now require approval.' : 'Group changes are now open.')
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to update lock')
+    }
+  }
+
+  const resolveRequest = async (requestId: string, approve: boolean) => {
+    setError('')
+    setMessage('')
+    try {
+      const msg = await resolve(requestId, approve)
+      setMessage(msg ?? '')
+      await load()
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to resolve request')
     }
   }
 
@@ -180,46 +177,21 @@ export function CourseDetail() {
   return (
     <div className="space-y-6">
       {/* ---- Course header ---- */}
-      <header className="space-y-4">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/courses')} className="btn-ghost p-2" aria-label="Back">
-            <ArrowLeft size={18} />
-          </button>
-          <div>
-            <h2 className="text-2xl font-bold">{course?.name ?? 'Course'}</h2>
-            <p className="text-sm text-[var(--text-secondary)]">
-              {course
-                ? `${course.code ? course.code + ' · ' : ''}${groups.length} groups · ${members.length} members`
-                : 'Loading…'}
-            </p>
-            {course && (
-              <span
-                className={`mt-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                  joinCodeActive(course)
-                    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-                    : 'bg-red-500/15 text-red-600 dark:text-red-400'
-                }`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${joinCodeActive(course) ? 'bg-green-500' : 'bg-red-500'}`} />
-                Join code {joinCodeActive(course) ? 'Active' : 'Expired'}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {course && isInstructor && (
-          <InstructorControls
-            course={course}
-            assigning={assigning}
-            assignCapacity={assignCapacity}
-            onAssignCapacity={setAssignCapacity}
-            onRandomAssign={runRandomAssign}
-            onRegenerate={regenerateCode}
-            onExpire={expireCode}
-            onCreateGroups={createGroups}
-          />
-        )}
-      </header>
+      <CourseHeader
+        course={course}
+        groupCount={groups.length}
+        memberCount={members.length}
+        isInstructor={isInstructor}
+        assigning={assigning}
+        assignCapacity={assignCapacity}
+        onBack={() => navigate('/courses')}
+        onAssignCapacity={setAssignCapacity}
+        onRandomAssign={runRandomAssign}
+        onRegenerate={regenerateCode}
+        onExpire={expireCode}
+        onCreateGroups={createGroups}
+        onToggleLock={toggleLock}
+      />
 
       {forbidden && (
         <GlassCard className="p-10 text-center text-[var(--text-secondary)]">
@@ -242,6 +214,11 @@ export function CourseDetail() {
         </GlassCard>
       )}
       {error && <GlassCard className="p-4 text-sm text-red-500">{error}</GlassCard>}
+
+      {/* ---- Instructor approval queue ---- */}
+      {isInstructor && (
+        <JoinRequestsPanel requests={requests} resolving={resolving} onResolve={resolveRequest} />
+      )}
 
       {/* ---- Body: groups + roster ---- */}
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -267,7 +244,9 @@ export function CourseDetail() {
                   index={i}
                   myGroupId={myGroupId}
                   isInstructor={isInstructor}
+                  locked={course?.locked ?? false}
                   joining={joining}
+                  pendingRequest={pendingRequestGroupId === g.id}
                   onOpen={() => navigate(`/courses/${courseId}/groups/${g.id}`)}
                   onJoin={() => joinGroup(g)}
                   onLeave={() => setConfirmLeave(true)}

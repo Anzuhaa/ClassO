@@ -1,12 +1,14 @@
 // TaskBoard: a three-column kanban (To Do / In Progress / Done) with task
-// creation, status transitions, and editable assignees.
+// creation, status transitions, and editable assignees. Non-members see a
+// locked, blurred board.
 import { useEffect, useState } from 'react'
-import { Plus, Pencil } from 'lucide-react'
-import { api } from '../../lib/api'
+import { Plus, Lock } from 'lucide-react'
+import { api, ApiError } from '../../lib/api'
 import { getStoredUser } from '../../lib/auth'
 import type { Profile, Task, TaskStatus } from '../../types'
 import { GlassCard, Button, Input, TextArea, Label, Spinner } from '../../components/ui'
 import { TaskEditModal } from './TaskEditModal'
+import { TaskCard } from './TaskCard'
 
 const COLUMNS: { status: TaskStatus; label: string; color: string }[] = [
   { status: 'todo', label: 'To Do', color: 'var(--status-todo)' },
@@ -19,6 +21,7 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [error, setError] = useState('')
+  const [nonMember, setNonMember] = useState(false)
 
   // Task being edited (assignee reassignment modal).
   const [editingTask, setEditingTask] = useState<Task | null>(null)
@@ -35,8 +38,16 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
     setLoading(true)
     try {
       setTasks(await api.listTasks(groupId))
-    } catch {
-      setTasks([])
+      setNonMember(false)
+      setError('')
+    } catch (e) {
+      // A 403 means the current user is not a member: lock the board.
+      if (e instanceof ApiError && e.status === 403) {
+        setTasks([])
+        setNonMember(true)
+      } else {
+        setTasks([])
+      }
     } finally {
       setLoading(false)
     }
@@ -52,8 +63,13 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
     const t = setInterval(() => {
       void api
         .listTasks(groupId)
-        .then((ts) => setTasks(ts ?? []))
-        .catch(() => {})
+        .then((ts) => {
+          setTasks(ts ?? [])
+          setNonMember(false)
+        })
+        .catch((e) => {
+          if (e instanceof ApiError && e.status === 403) setNonMember(true)
+        })
     }, 4000)
     return () => clearInterval(t)
   }, [groupId])
@@ -109,10 +125,10 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
   }
 
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-[var(--text-secondary)]">{tasks.length} tasks</p>
-        <Button onClick={() => setShowForm((s) => !s)}>
+        <Button onClick={() => setShowForm((s) => !s)} disabled={nonMember}>
           <Plus size={16} />
           Add Task
         </Button>
@@ -207,98 +223,15 @@ export function TaskBoard({ groupId, members }: { groupId: string; members: Prof
           onSave={(assigneeIds) => reassign(editingTask, assigneeIds)}
         />
       )}
+
+      {/* ---- Non-member lock overlay ---- */}
+      {nonMember && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl bg-black/40 p-4 text-center backdrop-blur-md">
+          <Lock size={24} className="text-white" />
+          <p className="text-sm font-semibold text-white">You are not a member of this group</p>
+          <p className="text-xs text-white/70">Join this group to view and edit tasks.</p>
+        </div>
+      )}
     </div>
   )
-}
-
-/** TaskCard renders one task with controls to move it between columns and edit
- * its assignee. */
-function TaskCard({
-  task,
-  currentUserId,
-  onMove,
-  onEdit,
-}: {
-  task: Task
-  currentUserId: string
-  onMove: (task: Task, status: TaskStatus) => void
-  onEdit: (task: Task) => void
-}) {
-  const canMoveBack = task.status !== 'todo'
-  const canMoveFwd = task.status !== 'done'
-  // Assignees as a fallback list when the backend has not returned `assignees`.
-  const assignees = task.assignees ?? (task.assigneeId ? [{ id: task.assigneeId, fullName: task.assigneeName ?? '' }] : [])
-  // Highlight tasks assigned to "you" with a stronger accent border.
-  const isMine = assignees.some((a) => a.id === currentUserId)
-  return (
-    <div
-      className={`glass-strong rounded-xl p-3 ${
-        isMine ? 'ring-2 ring-[var(--accent)]/60 border-transparent' : ''
-      }`}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-medium">{task.title}</p>
-        <button
-          className="btn-ghost p-1.5 shrink-0"
-          onClick={() => onEdit(task)}
-          aria-label={`Edit assignment for ${task.title}`}
-          title="Edit assignment"
-        >
-          <Pencil size={14} />
-        </button>
-      </div>
-      {task.description && (
-        <p className="mt-1 text-xs text-[var(--text-secondary)] line-clamp-2">{task.description}</p>
-      )}
-      {assignees.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {assignees.map((a) => (
-            <span
-              key={a.id}
-              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
-                a.id === currentUserId
-                  ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
-                  : 'border-blue-500/40 text-[var(--text-secondary)]'
-              }`}
-            >
-              {a.fullName || 'Unassigned'}
-            </span>
-          ))}
-        </div>
-      )}
-      {assignees.length === 0 && (
-        <div className="mt-2">
-          <span className="inline-flex items-center rounded-full border border-blue-500/40 px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
-            Unassigned
-          </span>
-        </div>
-      )}
-      <div className="mt-2 flex items-center justify-between">
-        <div className="flex gap-1 ml-auto">
-          {canMoveBack && (
-            <button className="btn-ghost px-2 py-1 text-xs" onClick={() => onMove(task, back(task.status))}>
-              ←
-            </button>
-          )}
-          {canMoveFwd && (
-            <button className="btn-ghost px-2 py-1 text-xs" onClick={() => onMove(task, fwd(task.status))}>
-              →
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** back returns the previous status in the kanban flow. */
-function back(status: TaskStatus): TaskStatus {
-  if (status === 'done') return 'in_progress'
-  return 'todo'
-}
-
-/** fwd returns the next status in the kanban flow. */
-function fwd(status: TaskStatus): TaskStatus {
-  if (status === 'todo') return 'in_progress'
-  return 'done'
 }
