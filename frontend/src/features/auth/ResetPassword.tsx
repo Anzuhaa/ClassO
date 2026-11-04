@@ -1,9 +1,10 @@
-// ResetPassword: the destination of the "forgot password" email link. The user
-// chooses a new password (and confirms it); on success they are routed to /login.
-import { useState } from 'react'
+// ResetPassword: the destination of the "forgot password" email link. On mount
+// it establishes the recovery session from the URL's tokens, then lets the user
+// choose a new password; on success they are routed to /login.
+import { useEffect, useState } from 'react'
 import { KeyRound, LogIn } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { completePasswordReset } from '../../lib/auth'
+import { completePasswordReset, establishRecoverySession } from '../../lib/auth'
 import { GlassCard, Button, Input, Label, Spinner } from '../../components/ui'
 
 export function ResetPassword() {
@@ -12,6 +13,23 @@ export function ResetPassword() {
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [ready, setReady] = useState(false)
+
+  // Establish the recovery session from the reset link's tokens before showing
+  // the form. An invalid/expired link surfaces a clear message instead of a
+  // mystery `updateUser` failure.
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const ok = await establishRecoverySession()
+      if (!active) return
+      if (!ok) setError('This reset link is invalid or has expired. Request a new one.')
+      setReady(true)
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
 
   const submit = async () => {
     setError('')
@@ -51,35 +69,43 @@ export function ResetPassword() {
           </div>
         </div>
 
-        <Label text="New password">
-          <Input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            autoComplete="new-password"
-            autoFocus
-          />
-        </Label>
-        <Label text="Confirm new password">
-          <Input
-            type="password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            placeholder="••••••••"
-            autoComplete="new-password"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void submit()
-            }}
-          />
-        </Label>
+        {!ready ? (
+          <div className="flex justify-center py-4">
+            <Spinner />
+          </div>
+        ) : (
+          <>
+            <Label text="New password">
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="new-password"
+                autoFocus
+              />
+            </Label>
+            <Label text="Confirm new password">
+              <Input
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="new-password"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void submit()
+                }}
+              />
+            </Label>
 
-        {error && <p className="text-sm text-red-500">{error}</p>}
+            {error && <p className="text-sm text-red-500">{error}</p>}
 
-        <Button onClick={submit} disabled={busy} className="w-full">
-          {busy ? <Spinner /> : <KeyRound size={16} />}
-          {busy ? 'Saving…' : 'Set new password'}
-        </Button>
+            <Button onClick={submit} disabled={busy || !ready} className="w-full">
+              {busy ? <Spinner /> : <KeyRound size={16} />}
+              {busy ? 'Saving…' : 'Set new password'}
+            </Button>
+          </>
+        )}
 
         <button
           onClick={() => navigate('/login', { replace: true })}

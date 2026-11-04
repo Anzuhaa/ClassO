@@ -31,19 +31,16 @@ export default function App() {
     }
   })
 
-  // Post-email-verification (and password-recovery) callback: Supabase redirects
-  // here after the user clicks the link in their inbox. We complete the token
-  // exchange, then route to /reset-password (recovery) or /login (verification).
+  // Post-email-verification callback: Supabase redirects here after the user
+  // clicks the confirmation link in their inbox. We complete the token exchange,
+  // clear any temporary auth state, and route to /login with a confirmation toast
+  // rather than auto-signing them in. (Password recovery routes to /reset-password
+  // directly, not through this handler.)
   useEffect(() => {
     if (window.location.pathname !== '/auth/callback') return
     void (async () => {
-      const { kind, message } = await handleAuthCallback()
-      if (kind === 'recovery') {
-        window.location.replace('/reset-password')
-        return
-      }
-      // Email verification: queue a toast that survives the redirect, then go to
-      // /login rather than auto-signing the user in.
+      const { message } = await handleAuthCallback()
+      // Queue a toast that survives the redirect, then go to /login.
       try {
         sessionStorage.setItem('classo.verifyToast', message)
       } catch {

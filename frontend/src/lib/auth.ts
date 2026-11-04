@@ -158,20 +158,64 @@ export async function logout(): Promise<void> {
 }
 
 /** sendPasswordReset triggers Supabase's password-recovery email for an address.
- * The emailed link lands on the app's `/auth/callback` route, which establishes
- * the recovery session and then forwards the user to `/reset-password` to choose
- * a new password. */
+ * The emailed link lands directly on `/reset-password`; that page establishes the
+ * recovery session from the URL and lets the user choose a new password. */
 export async function sendPasswordReset(email: string): Promise<void> {
   const sb = getSupabase()
   if (!sb) throw new Error('Supabase is not configured (missing VITE_SUPABASE_* env).')
   const { error } = await sb.auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: `${window.location.origin}/auth/callback`,
+    redirectTo: `${window.location.origin}/reset-password`,
   })
   if (error) throw new Error(error.message)
 }
 
+/** parseHashParams extracts the auth tokens Supabase returns in the URL hash
+ * (implicit flow): #access_token=…&refresh_token=…&type=recovery. */
+function parseHashParams(): Record<string, string> {
+  const out: Record<string, string> = {}
+  const hash = window.location.hash.replace(/^#/, '')
+  for (const pair of hash.split('&')) {
+    const eq = pair.indexOf('=')
+    if (eq < 0) continue
+    out[decodeURIComponent(pair.slice(0, eq))] = decodeURIComponent(pair.slice(eq + 1))
+  }
+  return out
+}
+
+/** establishRecoverySession reads the password-reset link's tokens from the URL
+ * (implicit `#access_token=…` or PKCE `?code=`) and establishes the auth session
+ * so the user can then set a new password. Returns false when the link is
+ * invalid or expired. */
+export async function establishRecoverySession(): Promise<boolean> {
+  const sb = getSupabase()
+  if (!sb) return false
+
+  const hash = parseHashParams()
+  const code = new URLSearchParams(window.location.search).get('code')
+
+  // PKCE flow: exchange the one-time code for a session.
+  if (code) {
+    const { data, error } = await sb.auth.exchangeCodeForSession(code)
+    return !error && !!data.session
+  }
+
+  // Implicit flow: set the session from the tokens in the hash.
+  if (hash.access_token) {
+    const { data, error } = await sb.auth.setSession({
+      access_token: hash.access_token,
+      refresh_token: hash.refresh_token ?? '',
+    })
+    return !error && !!data.session
+  }
+
+  // Nothing to exchange — the user may have landed here directly, or already
+  // have a valid recovery session persisted.
+  const { data } = await sb.auth.getSession()
+  return !!data.session
+}
+
 /** completePasswordReset sets a new password using the recovery session
- * established by handleAuthCallback (the reset-email link). */
+ * established by establishRecoverySession (the reset-email link). */
 export async function completePasswordReset(newPassword: string): Promise<void> {
   const sb = getSupabase()
   if (!sb) throw new Error('Supabase is not configured (missing VITE_SUPABASE_* env).')
@@ -189,77 +233,44 @@ export async function updatePassword(newPassword: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
-/** parseHashParams extracts the auth tokens Supabase returns in the URL hash
- * (implicit flow): #access_token=…&refresh_token=…&type=recovery. */
-function parseHashParams(): Record<string, string> {
-  const out: Record<string, string> = {}
-  const hash = window.location.hash.replace(/^#/, '')
-  for (const pair of hash.split('&')) {
-    const eq = pair.indexOf('=')
-    if (eq < 0) continue
-    out[decodeURIComponent(pair.slice(0, eq))] = decodeURIComponent(pair.slice(eq + 1))
-  }
-  return out
-}
-
-/** handleAuthCallback processes an incoming Supabase auth redirect (email
- * confirmation or password recovery). It establishes the session from the URL
- * (PKCE `?code=` or implicit `#access_token=…`), then reports which flow it was.
- * For a recovery link the session is kept so the caller can route to
- * `/reset-password`; for email verification the session is cleared so the caller
- * routes to `/login`. */
-export async function handleAuthCallback(): Promise<{
-  kind: 'verify' | 'recovery'
-  message: string
-}> {
+/** handleAuthCallback processes an incoming Supabase email-verification redirect.
+ * It establishes the session from the URL (PKCE `?code=` or implicit
+ * `#access_token=…`), then signs the user out and clears state so the caller can
+ * route to `/login` with a success notice rather than auto-signing them in.
+ * (Password recovery now routes directly to `/reset-password` instead.) */
+export async function handleAuthCallback(): Promise<{ message: string }> {
+  const message = 'Email verified successfully! Please log in to continue.'
   const sb = getSupabase()
-  const search = new URLSearchParams(window.location.search)
-  const hash = parseHashParams()
-  const isRecovery = search.get('type') === 'recovery' || hash.type === 'recovery'
-
   if (!sb) {
     clearSession()
-    return { kind: isRecovery ? 'recovery' : 'verify', message: 'Please continue.' }
+    return { message }
   }
 
   try {
-    // PKCE flow: a `?code=` query param is exchanged for a verified session.
+    const search = new URLSearchParams(window.location.search)
+    const hash = parseHashParams()
+
+    // PKCE flow.
     const code = search.get('code')
     if (code) {
       const { data } = await sb.auth.exchangeCodeForSession(code)
       if (data?.session) {
-        if (isRecovery) {
-          return { kind: 'recovery', message: 'Set a new password to finish signing in.' }
-        }
-        // Email verification: do not auto-authenticate — sign out and go to login.
         await sb.auth.signOut().catch(() => {})
-        clearSession()
-        return { kind: 'verify', message: 'Email verified successfully! Please log in to continue.' }
       }
-    }
-
-    // Implicit flow: the tokens arrive in the hash fragment.
-    if (hash.access_token) {
+    } else if (hash.access_token) {
+      // Implicit flow.
       const { data } = await sb.auth.setSession({
         access_token: hash.access_token,
         refresh_token: hash.refresh_token ?? '',
       })
       if (data?.session) {
-        if (isRecovery) {
-          return { kind: 'recovery', message: 'Set a new password to finish signing in.' }
-        }
         await sb.auth.signOut().catch(() => {})
-        clearSession()
-        return { kind: 'verify', message: 'Email verified successfully! Please log in to continue.' }
       }
     }
   } catch {
-    /* ignore — fall through to clearing state */
+    /* ignore — we always clear state and route to login */
   }
 
   clearSession()
-  return {
-    kind: isRecovery ? 'recovery' : 'verify',
-    message: isRecovery ? 'Set a new password to finish signing in.' : 'Email verified successfully! Please log in to continue.',
-  }
+  return { message }
 }
