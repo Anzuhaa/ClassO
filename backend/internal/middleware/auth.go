@@ -54,6 +54,13 @@ func Auth(cfg *config.Config, repo *repository.Repo) func(http.Handler) http.Han
 				return
 			}
 
+			// Bypass auth for pre-registration username availability checks: the
+			// caller has no account (and thus no token) yet.
+			if isPublicPath(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			userID := resolveIdentity(cfg, repo, r)
 			if userID == "" {
 				writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -71,6 +78,12 @@ func Auth(cfg *config.Config, repo *repository.Repo) func(http.Handler) http.Han
 // Authorization header.
 func isTokenAuthedDownload(r *http.Request) bool {
 	return strings.Contains(r.URL.Path, "/files/") && strings.HasSuffix(r.URL.Path, "/download")
+}
+
+// isPublicPath reports whether a request targets an endpoint that is reachable
+// without authentication (e.g. pre-registration username checks and health).
+func isPublicPath(r *http.Request) bool {
+	return r.URL.Path == "/v1/auth/check-username" || r.URL.Path == "/healthz"
 }
 
 // resolveIdentity returns the authenticated user id from the request, or "".

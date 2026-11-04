@@ -99,6 +99,20 @@ func (r *Repo) GetProfile(ctx context.Context, id string) (*models.Profile, erro
 	return &p, nil
 }
 
+// UsernameExists reports whether any profile already claims the given username,
+// compared case-insensitively and ignoring surrounding whitespace so "Alice" and
+// "  alice " resolve to the same slot as the unique index in 0008_usernames.sql.
+func (r *Repo) UsernameExists(ctx context.Context, username string) (bool, error) {
+	var exists bool
+	err := r.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM profiles
+			WHERE lower(btrim(username)) = lower(btrim($1))
+		)
+	`, username).Scan(&exists)
+	return exists, err
+}
+
 // GetProfileByEmail fetches a single profile by email (case-insensitive).
 func (r *Repo) GetProfileByEmail(ctx context.Context, email string) (*models.Profile, error) {
 	row := r.Pool.QueryRow(ctx, `

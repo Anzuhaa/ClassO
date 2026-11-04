@@ -23,6 +23,33 @@ func NewProfileHandler(repo *repository.Repo, cfg *config.Config) *ProfileHandle
 	return &ProfileHandler{repo: repo, cfg: cfg}
 }
 
+// CheckUsername reports whether a username is available for registration. It is
+// unauthenticated (called before an account exists) and answers a case-
+// insensitive, whitespace-trimmed uniqueness query against profiles.username.
+//
+// Returns 200 `{available:true}` when free, or 409 `{available:false}` when the
+// username is already taken — the 409 also serves as the conflict signal the
+// registration form treats as a hard "username already taken" failure.
+func (h *ProfileHandler) CheckUsername(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		writeError(w, http.StatusBadRequest, "username is required")
+		return
+	}
+
+	taken, err := h.repo.UsernameExists(r.Context(), username)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check username")
+		return
+	}
+
+	if taken {
+		writeJSON(w, http.StatusConflict, map[string]bool{"available": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"available": true})
+}
+
 // Me returns the profile identified by the current request's user id (from the
 // verified Supabase JWT, or the demo user when ALLOW_NO_AUTH is enabled).
 func (h *ProfileHandler) Me(w http.ResponseWriter, r *http.Request) {

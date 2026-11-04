@@ -54,6 +54,9 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	// Username availability (pre-registration, unauthenticated).
+	mux.HandleFunc("GET /v1/auth/check-username", profileHandler.CheckUsername)
+
 	// Profiles (self-service; email/password live in Supabase Auth).
 	mux.HandleFunc("GET /v1/profiles/me", profileHandler.Me)
 	mux.HandleFunc("PATCH /v1/profiles/me", profileHandler.Update)

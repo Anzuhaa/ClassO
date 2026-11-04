@@ -83,17 +83,18 @@ function roleFromMeta(user: { user_metadata?: Record<string, unknown> } | undefi
 }
 
 /** register creates a new account without signing the user in. The new user's
- * profile row is created automatically by the backend (handle_new_user). Any
- * session Supabase returns from auto-confirm is discarded (and signed out) so
- * the caller can redirect to the login screen instead of auto-authenticating. */
-export async function register(email: string, password: string, fullName: string): Promise<AuthUser> {
+ * profile row is created automatically by the backend (handle_new_user), which
+ * also persists the optional username. Any session Supabase returns from
+ * auto-confirm is discarded (and signed out) so the caller can redirect to the
+ * login screen instead of auto-authenticating. */
+export async function register(email: string, password: string, fullName: string, username?: string): Promise<AuthUser> {
   const sb = getSupabase()
   if (!sb) throw new Error('Supabase is not configured (missing VITE_SUPABASE_* env).')
 
   const { data, error } = await sb.auth.signUp({
     email,
     password,
-    options: { data: { full_name: fullName } },
+    options: { data: { full_name: fullName, username: username?.trim() || undefined } },
   })
   if (error) throw new Error(error.message)
 
@@ -154,4 +155,85 @@ export async function logout(): Promise<void> {
     }
   }
   clearSession()
+}
+
+/** sendPasswordReset triggers Supabase's password-recovery email for an address.
+ * The emailed link lands on the app's `/reset-password` route (Supabase appends a
+ * PKCE `code` + `type=recovery` for the password change). */
+export async function sendPasswordReset(email: string): Promise<void> {
+  const sb = getSupabase()
+  if (!sb) throw new Error('Supabase is not configured (missing VITE_SUPABASE_* env).')
+  const { error } = await sb.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: `${window.location.origin}/reset-password`,
+  })
+  if (error) throw new Error(error.message)
+}
+
+/** completePasswordReset sets a new password using the recovery session
+ * established by the reset-email link (the PKCE `code` must already have been
+ * exchanged, e.g. by handleAuthCallback, before calling this). */
+export async function completePasswordReset(newPassword: string): Promise<void> {
+  const sb = getSupabase()
+  if (!sb) throw new Error('Supabase is not configured (missing VITE_SUPABASE_* env).')
+  const { data, error } = await sb.auth.updateUser({ password: newPassword })
+  if (error) throw new Error(error.message)
+  if (!data.user) throw new Error('Password reset returned no user.')
+}
+
+/** updatePassword sets a new password for the currently signed-in user (used by
+ * the "change password" flow inside the Edit Profile modal). */
+export async function updatePassword(newPassword: string): Promise<void> {
+  const sb = getSupabase()
+  if (!sb) throw new Error('Supabase is not configured (missing VITE_SUPABASE_* env).')
+  const { error } = await sb.auth.updateUser({ password: newPassword })
+  if (error) throw new Error(error.message)
+}
+
+/** handleAuthCallback processes an incoming Supabase auth redirect (email
+ * confirmation or password recovery). It completes any PKCE code exchange. For a
+ * recovery link it keeps the established session so the caller can route to
+ * `/reset-password` and set a new password; for email verification it clears
+ * state so the caller routes to `/login`. Returns the kind of redirect plus a
+ * user-facing message. */
+export async function handleAuthCallback(): Promise<{
+  kind: 'verify' | 'recovery'
+  message: string
+}> {
+  const sb = getSupabase()
+  const isRecovery = new URLSearchParams(window.location.search).get('type') === 'recovery'
+
+  if (!sb) {
+    clearSession()
+    return { kind: isRecovery ? 'recovery' : 'verify', message: 'Please continue.' }
+  }
+
+  try {
+    // A `?code=` query param (PKCE flow) can be exchanged for a verified session.
+    const code = new URLSearchParams(window.location.search).get('code')
+    if (code) {
+      const { data } = await sb.auth.exchangeCodeForSession(code)
+      if (data?.session && !isRecovery) {
+        // Email verification: do not auto-authenticate — sign out and go to login.
+        try {
+          await sb.auth.signOut()
+        } catch {
+          /* ignore */
+        }
+        clearSession()
+        return { kind: 'verify', message: 'Email verified successfully! Please log in to continue.' }
+      }
+      // Recovery: keep the session so the user can set a new password next.
+      if (data?.session) {
+        return { kind: 'recovery', message: 'Set a new password to finish signing in.' }
+      }
+    }
+  } catch {
+    /* ignore — fall through to clearing state */
+  }
+
+  clearSession()
+  return {
+    kind: isRecovery ? 'recovery' : 'verify',
+    message: isRecovery ? 'Set a new password to finish signing in.' : 'Email verified successfully! Please log in to continue.',
+  }
 }

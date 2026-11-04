@@ -69,6 +69,24 @@ export const api = {
   updateMe: (body: { fullName?: string }) =>
     request<Profile>('/profiles/me', { method: 'PATCH', body: JSON.stringify(body) }),
   promoteMe: () => request<Profile>('/profiles/me/promote', { method: 'POST' }),
+  // Username availability (pre-registration; no auth token required). A 409
+  // means the username is taken — mapped here to a typed result so callers get
+  // a uniform { available } shape rather than an exception.
+  checkUsername: async (username: string): Promise<{ available: boolean }> => {
+    const res = await fetch(`${BASE}/auth/check-username?username=${encodeURIComponent(username)}`)
+    if (res.status === 409) return { available: false }
+    if (!res.ok) {
+      let message = `Username check failed (${res.status})`
+      try {
+        const body = await res.json()
+        if (body?.error) message = body.error
+      } catch {
+        /* ignore non-JSON */
+      }
+      throw new ApiError(res.status, message)
+    }
+    return res.json()
+  },
   // Multipart avatar upload (not JSON, so it bypasses the JSON request helper).
   uploadAvatar: async (file: File): Promise<Profile> => {
     const form = new FormData()

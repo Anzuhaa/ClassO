@@ -5,12 +5,13 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate, useLocation } from
 import { GraduationCap, Moon, Sun, BookOpen, Users, PanelLeft } from 'lucide-react'
 import { useTheme } from './lib/theme'
 import { api } from './lib/api'
-import { getStoredUser, getAccessToken, persistUser, type AuthUser } from './lib/auth'
+import { getStoredUser, getAccessToken, persistUser, handleAuthCallback, type AuthUser } from './lib/auth'
 import type { Course } from './types'
 import { CourseList } from './features/courses/CourseList'
 import { CourseDetail } from './features/courses/CourseDetail'
 import { GroupWorkspace } from './features/groups/GroupWorkspace'
 import { AuthScreen } from './features/auth/AuthScreen'
+import { ResetPassword } from './features/auth/ResetPassword'
 import { UserMenu } from './features/auth/UserMenu'
 
 export default function App() {
@@ -19,6 +20,38 @@ export default function App() {
     const stored = getStoredUser()
     return token ? stored : null
   })
+  const [toast, setToast] = useState(() => {
+    // Re-surface a verify notice that was queued before the redirect reload.
+    try {
+      const t = sessionStorage.getItem('classo.verifyToast')
+      if (t) sessionStorage.removeItem('classo.verifyToast')
+      return t ?? ''
+    } catch {
+      return ''
+    }
+  })
+
+  // Post-email-verification (and password-recovery) callback: Supabase redirects
+  // here after the user clicks the link in their inbox. We complete the token
+  // exchange, then route to /reset-password (recovery) or /login (verification).
+  useEffect(() => {
+    if (window.location.pathname !== '/auth/callback') return
+    void (async () => {
+      const { kind, message } = await handleAuthCallback()
+      if (kind === 'recovery') {
+        window.location.replace('/reset-password')
+        return
+      }
+      // Email verification: queue a toast that survives the redirect, then go to
+      // /login rather than auto-signing the user in.
+      try {
+        sessionStorage.setItem('classo.verifyToast', message)
+      } catch {
+        /* ignore */
+      }
+      window.location.replace('/login')
+    })()
+  }, [])
 
   // On mount, refresh the role and avatar from the backend's authoritative
   // profile (which syncs from Supabase Auth metadata) so an admin's role change
@@ -62,7 +95,17 @@ export default function App() {
           onUserUpdated={setUser}
         />
       ) : (
-        <AuthScreen onAuthed={setUser} />
+        <Routes>
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route
+            path="/login"
+            element={<AuthScreen onAuthed={setUser} initialNotice={toast} onDismissNotice={() => setToast('')} />}
+          />
+          <Route
+            path="*"
+            element={<AuthScreen onAuthed={setUser} initialNotice={toast} onDismissNotice={() => setToast('')} />}
+          />
+        </Routes>
       )}
     </BrowserRouter>
   )
