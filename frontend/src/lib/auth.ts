@@ -169,49 +169,23 @@ export async function sendPasswordReset(email: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
-/** parseHashParams extracts the auth tokens Supabase returns in the URL hash
- * (implicit flow): #access_token=…&refresh_token=…&type=recovery. */
-function parseHashParams(): Record<string, string> {
-  const out: Record<string, string> = {}
-  const hash = window.location.hash.replace(/^#/, '')
-  for (const pair of hash.split('&')) {
-    const eq = pair.indexOf('=')
-    if (eq < 0) continue
-    out[decodeURIComponent(pair.slice(0, eq))] = decodeURIComponent(pair.slice(eq + 1))
-  }
-  return out
-}
-
-/** establishRecoverySession reads the password-reset link's tokens from the URL
- * (implicit `#access_token=…` or PKCE `?code=`) and establishes the auth session
- * so the user can then set a new password. Returns false when the link is
- * invalid or expired. */
+/** establishRecoverySession lets the Supabase client parse the password-reset
+ * link from the URL (implicit `#access_token=…` hash, or PKCE `?code=`) and
+ * establish the recovery session, then reports whether the user can now set a
+ * new password. Returns false when the link is invalid or expired. */
 export async function establishRecoverySession(): Promise<boolean> {
   const sb = getSupabase()
   if (!sb) return false
 
-  const hash = parseHashParams()
-  const code = new URLSearchParams(window.location.search).get('code')
-
-  // PKCE flow: exchange the one-time code for a session.
-  if (code) {
-    const { data, error } = await sb.auth.exchangeCodeForSession(code)
-    return !error && !!data.session
+  try {
+    // initialize() triggers the client's own URL-hash / PKCE parsing (enabled by
+    // detectSessionInUrl), which correctly validates and stores the session.
+    await sb.auth.initialize()
+    const { data } = await sb.auth.getSession()
+    return !!data.session
+  } catch {
+    return false
   }
-
-  // Implicit flow: set the session from the tokens in the hash.
-  if (hash.access_token) {
-    const { data, error } = await sb.auth.setSession({
-      access_token: hash.access_token,
-      refresh_token: hash.refresh_token ?? '',
-    })
-    return !error && !!data.session
-  }
-
-  // Nothing to exchange — the user may have landed here directly, or already
-  // have a valid recovery session persisted.
-  const { data } = await sb.auth.getSession()
-  return !!data.session
 }
 
 /** completePasswordReset sets a new password using the recovery session
@@ -234,10 +208,10 @@ export async function updatePassword(newPassword: string): Promise<void> {
 }
 
 /** handleAuthCallback processes an incoming Supabase email-verification redirect.
- * It establishes the session from the URL (PKCE `?code=` or implicit
- * `#access_token=…`), then signs the user out and clears state so the caller can
- * route to `/login` with a success notice rather than auto-signing them in.
- * (Password recovery now routes directly to `/reset-password` instead.) */
+ * It lets the client parse the URL (enabled by detectSessionInUrl), then signs
+ * the user out and clears state so the caller can route to `/login` with a
+ * success notice rather than auto-signing them in. (Password recovery routes to
+ * `/reset-password` directly instead.) */
 export async function handleAuthCallback(): Promise<{ message: string }> {
   const message = 'Email verified successfully! Please log in to continue.'
   const sb = getSupabase()
@@ -247,25 +221,10 @@ export async function handleAuthCallback(): Promise<{ message: string }> {
   }
 
   try {
-    const search = new URLSearchParams(window.location.search)
-    const hash = parseHashParams()
-
-    // PKCE flow.
-    const code = search.get('code')
-    if (code) {
-      const { data } = await sb.auth.exchangeCodeForSession(code)
-      if (data?.session) {
-        await sb.auth.signOut().catch(() => {})
-      }
-    } else if (hash.access_token) {
-      // Implicit flow.
-      const { data } = await sb.auth.setSession({
-        access_token: hash.access_token,
-        refresh_token: hash.refresh_token ?? '',
-      })
-      if (data?.session) {
-        await sb.auth.signOut().catch(() => {})
-      }
+    await sb.auth.initialize()
+    const { data } = await sb.auth.getSession()
+    if (data?.session) {
+      await sb.auth.signOut().catch(() => {})
     }
   } catch {
     /* ignore — we always clear state and route to login */

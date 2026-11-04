@@ -16,11 +16,11 @@ export function getSupabase(): SupabaseClient | null {
   if (!client) {
     client = createClient(url, anonKey, {
       auth: {
-        // No email confirmation: signup returns a session immediately so
-        // testing stays frictionless.
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: false,
+        // Parse auth redirects (email confirmation / password recovery) from the
+        // URL hash so `getSession()` can report the established session.
+        detectSessionInUrl: true,
       },
     })
   }
